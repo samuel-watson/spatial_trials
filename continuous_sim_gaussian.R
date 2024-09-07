@@ -7,25 +7,31 @@ require(patchwork)
 source(paste0(getwd(),"/solarized.R"))
 
 # flags for data
-use_data <- TRUE # use the simulated saved data
-save_data <- FALSE # save newly created data
-
+use_data <- FALSE # use the simulated saved data
+save_data <- TRUE # save newly created data
 
 #SIMULATION PARAMETERS
 
-baseline <- 0.3
-beta <- -0.15 # max absolute intervention effect
-max_dist <- 0.4
-b0 <- log(baseline/(1-baseline))
-b1 <- log((baseline+beta)/(1-baseline-beta)) - b0
-n_locs <- 10
+# Upper bound on Del_E 
+max_de <- function(n_locs){
+  sqrt(8/(n_locs*3*sqrt(3)))
+}
+
+beta <- -0.3 # max absolute intervention effect
+max_dist <- 0.3
+n_locs <- 8
 n_seed <- 10
-n_child <- 300
+n_child <- 100
 cov_pars <- c(0.25,0.5) # G.P. variance, length scale
+del_e_ul <- max_de(n_locs)
 
 # FUNCTIONS
 
 # for simulating data
+fn <- function(x,l,kappa,b,nu,del){
+  b*((1-((-1/l)*log(exp(-l*x/del) + exp(-l)))^kappa)^nu)
+}
+
 fn2 <- function(d,theta,eff){
   x <- cos(d*pi/(2*theta))
   x[d > theta] <- 0
@@ -37,10 +43,10 @@ fn2 <- function(d,theta,eff){
 
 # if prior data exists
 if(use_data){
-  if(!file.exists(paste0(getwd(),"/data/data_",cov_pars[1],"_",cov_pars[2],"_cont_sp.RDS"))){
+  if(!file.exists(paste0(getwd(),"/data/data_",cov_pars[1],"_",cov_pars[2],"_",n_seed,n_child,"cont_sp.RDS"))){
     stop("Data for this combination of parameters does not exist")
   } else {
-    dfp <- readRDS(paste0(getwd(),"/data/data_",cov_pars[1],"_",cov_pars[2],"_cont_sp.RDS"))
+    dfp <- readRDS(paste0(getwd(),"/data/data_",cov_pars[1],"_",cov_pars[2],"_",n_seed,n_child,"cont_sp.RDS"))
   }
 } else {
   # create some fake locations
@@ -67,8 +73,8 @@ if(use_data){
     ~ (1|fexp(X,Y)),
     data = as.data.frame(dfp)[,c("X","Y")],
     covariance = cov_pars,
-    mean = c(b0-exp(cov_pars[1]/2)),
-    family = binomial()
+    mean = c(0),
+    family = gaussian()
   )
   
   sim_data <- mod$sim_data(type="all")
@@ -76,8 +82,7 @@ if(use_data){
   rm(mod)
   
   
-  if(save_data) saveRDS(dfp,paste0(getwd(),"/data/data_",gp_var,"_",lscale,"_cont_sp.RDS"))
-  
+  if(save_data) saveRDS(dfp,paste0(getwd(),"/data/data_",cov_pars[1],"_",cov_pars[2],"_",n_seed,n_child,"cont_sp.RDS"))
 }
 
 # plot the locations
@@ -90,9 +95,20 @@ p_loc <- ggplot()+
 
 # function to generate new
 
-generate_intervention <- function(data, plot = TRUE){
-  int_idx <- sample(1:nrow(data),n_locs)
+generate_intervention <- function(data, max_dist, beta, n_locs, plot = TRUE){
+  
+  # spatially regulated sampling scheme
+  int_idx <- sample(1:nrow(data),1)
   sampled_locs <- data[int_idx,]
+  while(nrow(sampled_locs) < n_locs){
+    int_idx_new <- sample(1:nrow(data),1)
+    dists <- c(st_distance(sampled_locs,dfp[int_idx_new,]))
+    if(min(dists) > max_dist*1.5){
+      sampled_locs <- rbind(sampled_locs, dfp[int_idx_new,])
+      int_idx <- c(int_idx, int_idx_new)
+    } 
+  }
+  
   data$intervention <- 0
   data[int_idx,'intervention'] <- 1
   
@@ -104,11 +120,11 @@ generate_intervention <- function(data, plot = TRUE){
   }
   
   # generate intervention effect
-  data$y_true <- fn2(data$distance,max_dist,b1)
+  data$y_true <- fn(data$distance,50,4,beta,8,max_dist)
+    #fn2(data$distance,max_dist,b1)
   # simulate outcome data
   data$sim_p <- data$y_true + data$u
-  data$sim_p <- exp(data$sim_p)/(1+exp(data$sim_p))
-  data$sim_y <- rbinom(nrow(data),1,data$sim_p)
+  data$sim_y <- rnorm(nrow(data),data$sim_p)
   
   if(plot){
     p_dist <- ggplot()+
@@ -144,103 +160,99 @@ generate_intervention <- function(data, plot = TRUE){
 }
 
 # test function & visualise
-dfp <- generate_intervention(dfp, TRUE)
+dfp <- generate_intervention(dfp, 0.3, -0.3, 8, TRUE)
 
 ## SIMULATION
 
-dfanal <- as.data.frame(dfp)
-dfanal <- dfanal[,-which(colnames(dfanal)=="dp")]
-
-# twoway0() is the function (12) in the article
-# twoway1() is function (11) with del_I = del_E
-# twoway2() is function (11) in the article
-
-model2 <- Model$new(
-  ~ twoway0(distance,16,2,50) + (1|hsgp_fexp(X,Y)),
-  data=dfanal,
-  covariance = c(0.2,0.25),
-  mean = c(b0,b1,max_dist),
-  family = binomial()
+result <- list(
+  b_eff = c(),
+  del_e = c(),
+  cover_eff = c(),
+  cover_del = c(),
+  cover_eff_kr = c(),
+  cover_del_kr = c(),
+  ext = c(),
+  lr = c()
 )
 
-model2$set_trace(1)
-model2$covariance$hsgp(m = c(20,20), L = c(1.2,1.2))
-model2$update_parameters(cov.pars = c(0.2,0.2))
-
-# method = "saem", 
-# algo = 2, 
-# pr.average = FALSE,
-# se.theta = FALSE,
-# alpha = 0.6,
-# convergence.prob = 0.99,
-# conv.criterion = 2,
-
-fit2 <- model2$MCML(y = dfp$sim_y, 
-                    lower.bound = c(-10,-10,0.01), 
-                    upper.bound = c(10,10,10))
-
-saveRDS(fit2,paste0(file_path,"Dropbox/My PC (DESKTOP-NAUP832)/Documents/article_case_study_fit0.RDS"))
-fit2 <- readRDS(paste0(file_path,"Dropbox/My PC (DESKTOP-NAUP832)/Documents/article_case_study_fit0.RDS"))
-
-
-fn <- function(x,l,kappa,b,nu,del){
-  b*((1-((-1/l)*log(exp(-l*x/del) + exp(-l)))^kappa)^nu)
+for(i in 1:100){
+  cat("\n\nITER: ",i," OF 100\n\n")
+  
+  fitted <- FALSE
+  
+  while(!fitted){
+    dfp <- generate_intervention(dfp, 0.3, -0.3, 10, FALSE)
+    dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
+    
+    # twoway0() is the function (12) in the article
+    # twoway1() is function (11) with del_I = del_E
+    # twoway2() is function (11) in the article
+    
+    model2 <- Model$new(
+      ~ twoway0(distance,8,4,50) + (1|hsgp_fexp(X,Y)),
+      data=dfanal,
+      covariance = c(0.2,0.25),
+      mean = c(0.01,-0.01, 0.10),
+      family = gaussian()
+    )
+    
+    model2$set_trace(1)
+    model2$covariance$hsgp(m = c(20,20), L = c(1.2,1.2))
+    model2$update_parameters(cov.pars = c(0.2,0.2))
+    
+    fit2 <- tryCatch(model2$MCML(y = dfp$sim_y, 
+                        lower.bound = c(-10,-10,0.01), 
+                        upper.bound = c(10,10,10)),
+             error = function(i)return(list()))
+    if(is(fit2,"mcml"))fitted <- TRUE
+  }
+  
+  model2b <- Model$new(
+    ~ twoway0(distance,8,4,50) + (1|fexp(X,Y)),
+    data=dfanal,
+    covariance = model2$covariance$parameters,
+    mean = model2$mean$parameters,
+    family = gaussian()
+  )
+  model2b$covariance$hsgp(m = c(20,20), L = c(1.2,1.2))
+  model2b$update_parameters(cov.pars = model2$covariance$parameters)
+  model2b$update_y(dfp$sim_y)
+  kr <- model2b$small_sample_correction("KR")
+  se <- sqrt(diag(kr$vcov_beta))
+  
+  yfit <- fn(dfp$distance,50,4,model2$mean$parameters[2],8,model2$mean$parameters[3])
+  beta_est <- model2$mean$parameters
+  yvar <- dfp$sim_y - yfit + model2$mean$X[,2:3] %*% beta_est[2:3] - model2$u()[,1]
+  
+  lfit1 <- lm(yvar ~ model2$mean$X - 1)
+  lfit2 <- lm(yvar ~ 1)
+  an1 <- anova(lfit1, lfit2)
+  
+  result$b_eff <- c(result$b_eff, fit2$coefficients$est[2])
+  result$del_e <- c(result$del_e, fit2$coefficients$est[3])
+  result$cover_eff <- c(result$cover_eff, fit2$coefficients$lower[2] < beta & fit2$coefficients$upper[2] > beta)
+  result$cover_del <- c(result$cover_eff, fit2$coefficients$lower[3] < max_dist & fit2$coefficients$upper[3] > max_dist)
+  result$cover_eff_kr <- c(result$cover_eff_kr, fit2$coefficients$est[2] - qt(0.975,df=kr$dof[2])*se[2] < beta & fit2$coefficients$est[2] + qt(0.975,df=kr$dof[2])*se[2] > beta)
+  result$cover_del_kr <- c(result$cover_eff_kr, fit2$coefficients$est[3] - qt(0.975,df=kr$dof[3])*se[3] < max_dist & fit2$coefficients$est[3] + qt(0.975,df=kr$dof[3])*se[3] > max_dist)
+  result$ext <- c(result$ext, 1-pnorm((model2$mean$parameters[3]-del_e_ul)/fit2$coefficients$SE[3]))
+  result$lr <- c(result$lr, an1$`Pr(>F)`[2])
+  
+  if(i %% 100 == 0) saveRDS(result, paste0(getwd(),"/results/sim_",cov_pars[1],"_",cov_pars[2],"_",n_seed,n_child,"cont_sp.RDS"))
 }
 
-df1 <- data.frame(distance = seq(0,0.75,length.out=100))
-df1$y <- fn(df1$distance,
-            50,
-            4,
-            model2$mean$parameters[2],
-            16,
-            model2$mean$parameters[3])
-
-df1$cl <- sample(1:10,nrow(df1),replace=TRUE)
-
-modeld <- Model$new(
-  ~ twoway0(distance,16,2,50) + (1|gr(cl)),
-  data=df1,
-  covariance = c( 0.05),
-  mean = model2$mean$parameters,
-  family = poisson()
-)
-
-X0 <- modeld$mean$X
-X0[,1] <- 0
-M <- solve(model2$information_matrix())
-rm(modeld)
-
-df1$se <- sqrt(diag(X0%*%M%*%t(X0)))
-df1$lci <- df1$y - qnorm(0.975)*df1$se
-df1$uci <- df1$y + qnorm(0.975)*df1$se
-
-df1$true <- fn2(df1$distance, max_dist, b1)
 
 
-p4 <- ggplot()+
-  geom_hline(yintercept = 0,lty=3)+
-  geom_ribbon(data = df1, aes(x = distance, ymin=lci,ymax= uci), fill = unname(solar_color[14]), alpha = 0.2)+
-  geom_line(data = df1, aes(x = distance, y = y))+
-  geom_line(data=df1, aes(x=distance, y=true), lty =2)+
-  theme_solar()+
-  scale_x_continuous(expand = c(0.01,0))+
-  labs(x="Distance (km)", y = "Log relative risk")+
-  ggtitle("Estimated treatment effect")
+qplot(result$b_eff)
+mean(result$b_eff)
 
-p4
+qplot(result$del_e)
+mean(result$del_e)
 
-require(patchwork)
+mean(result$cover_eff)
+mean(result$cover_eff_kr)
 
-(p_int + p_u) / (p_p + p4)
+mean(result$cover_del)
+mean(result$cover_del_kr)
 
-# function
-# 1 => 1
-# 0 => 0
-exp(0)
-exp(-Inf)
-fn2 <- function(x,theta){exp(-x/theta)}
-x <- c(0,0.5,1,1.5,2)
-fn2(x,0.2)
-fn3 <- function(x,theta,b_del){
-  exp(0.02*log(exp(-50*(x/b_del)) + exp(-50))/theta)
-}
+mean(result$lr <= 0.05)
+
