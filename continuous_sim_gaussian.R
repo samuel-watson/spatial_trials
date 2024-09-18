@@ -175,7 +175,7 @@ result <- list(
   lr = c()
 )
 
-for(i in 1:100){
+for(i in 1:900){
   cat("\n\nITER: ",i," OF 100\n\n")
   
   fitted <- FALSE
