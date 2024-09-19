@@ -10,8 +10,8 @@ source(paste0(getwd(),"/solarized.R"))
 Rcpp::sourceCpp("src/perm_test.cpp")
 
 # flags for data
-use_data <- FALSE # use the simulated saved data
-save_data <- TRUE # save newly created data
+use_data <- TRUE # use the simulated saved data
+save_data <- FALSE # save newly created data
 
 #SIMULATION PARAMETERS
 
@@ -28,24 +28,6 @@ n_seed <- 10
 n_child <- 100
 cov_pars <- c(0.25,0.5) # G.P. variance, length scale
 del_e_ul <- max_de(n_locs)
-
-# FUNCTIONS
-
-# for simulating data
-fn <- function(x,l,kappa,b,nu,del){
-  b*((1-((-1/l)*log(exp(-l*x/del) + exp(-l)))^kappa)^nu)
-}
-
-fn2 <- function(x,l,kappa,nu,del_e, del_i, b){
-  b*((1-((sign(x)/l)*log(exp(sign(x)*l*(x + del_i)/(del_e + del_i)) + exp(l*(sign(x)+1)/2)))^kappa)^nu) 
-}
-
-fn3 <- function(d,theta,eff){
-  x <- cos(d*pi/(2*theta))
-  x[d > theta] <- 0
-  x <- eff*x
-  return(x)
-}
 
 # GENERATE BASE DATA INCL. SAMPLE POINTS AND LATENT SURFACE
 
@@ -77,6 +59,7 @@ if(use_data){
   dfp <- dfp[!duplicated(paste0(dfp_coord$X,dfp_coord$Y)),]
   dfp_coord <- as.data.frame(st_coordinates(dfp))
   dfp <- cbind(dfp,dfp_coord)
+  dfp$t <- 1
   
   mod <- Model$new(
     ~ (1|fexp(X,Y)),
@@ -138,7 +121,7 @@ generate_intervention <- function(data, del_e, del_i, beta, n_locs, plot = TRUE)
   
   idx <- sort(sample(1:nrow(dfi),n_locs))
   data$distance <- apply(dists_i[,idx],1,min)
-  data$fn <- fn2(data$distance,-50,4,8,del_e,del_i,1)
+  data$fn <- fun(data$distance,50,4,8,c(del_e,-del_i),1,data$t)
   
   # generate intervention effect
   data$y_true <- data$fn * beta
@@ -205,13 +188,13 @@ E <- eigen(S)
 B <- E$vectors%*%diag(1/sqrt(E$values))
 
 beta <- 0
-pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),as.matrix(B),dfanal$distance,dists_i,c(0.01,-0.2),c(0.4,0.0),50,4,8)
 pvals <- c()
 pvals_ml <- c()
 for(zz in 1:1000){
   cat("\nITER: ",zz,"\n")
   dfp <- generate_intervention(dfp, del_e, del_i, beta, n_locs, FALSE)
   dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
+  pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),as.matrix(B),dfanal$distance,dists_i,c(0.01),c(0.4),c(-0.2),c(0.0),50,4,8,dfanal$t)
   
   # # maximum likelihood model
   model2 <- Model$new(
@@ -233,11 +216,10 @@ for(zz in 1:1000){
   se <- tryCatch(sqrt(diag(solve(model2$information_matrix())))[2], error = function(e)return(NA))
   pvals_ml <- c(pvals_ml, 2*(1-pnorm(abs(fit2$coefficients$est[2]/se))))
   
-  update_y(pt,dfanal$sim_y-mean(dfanal$sim_y),dfanal$distance)
-  pval_new <- permute_p_value_b(pt,n_locs,0.3,200,c(0.2,0.1))
+  pval_new <- permute_p_value_b(pt,n_locs,0.3,200,c(0.2,-0.1))
   pvals <- c(pvals, pval_new)
-  
-  if(i %% 100){
+  rm(pt)
+  if(save_data & i %% 100){
     saveRDS(pvals,paste0(getwd(),"/results/pvals_b0_dis.RDS"))
     saveRDS(pvals_ml,paste0(getwd(),"/results/pvals_ml_b0_dis.RDS"))
   }
@@ -263,12 +245,11 @@ B <- E$vectors%*%diag(1/sqrt(E$values))
 
 
 
-for(i in 741:1000){
+for(i in 1:1000){
   cat("\nITER: ",i,"\n")
-  pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),as.matrix(B),dfanal$distance,dists_i,c(0.01,-0.2),c(0.4,0.0),50,4,8)
   dfp <- generate_intervention(dfp, 0.2, 0.1, -0.3, n_locs, FALSE)
   dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
-  update_y(pt,dfanal$sim_y-mean(dfanal$sim_y),dfanal$distance)
+  pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),as.matrix(B),dfanal$distance,dists_i,c(0.01),c(0.4),c(-0.2),c(0.0),50,4,8,dfanal$t)
   
   model2 <- Model$new(
     ~ twoway2(distance,8,4,50) + (1|hsgp_fexp(X,Y)),
@@ -304,11 +285,11 @@ for(i in 741:1000){
   }
   
   
-  best_del <- optim_r(pt,c(de0,di0))
+  best_del <- optim_r(pt,c(0.2,0.1))
   dfcid$dp_e[i] <- best_del[1]
   dfcid$dp_i[i] <- best_del[3]
 
-  dfanal$fn <- fun(dfanal$distance,50,4,8,best_del[c(1,3)],TRUE)
+  dfanal$fn <- fun(dfanal$distance,50,4,8,best_del[c(1,3)],1,dfanal$t,TRUE)
   
   if(!any(!is.finite(dfanal$fn)|is.na(dfanal$fn))){
     
@@ -331,27 +312,23 @@ for(i in 741:1000){
     
     if(is(fit2b,"mcml")){
       dfci$bp[i] <- fit2b$coefficients$est[2]
-      bval <- fit2b$coefficients$est[2]
-      dfci$upper[i] <- confint_b(pt,10,0.3,250,dfci$bp[i]+0.2,dfci$bp[i],best_del[c(1,3)])
-      dfci$lower[i] <- confint_b(pt,10,0.3,250,dfci$bp[i]-0.2,dfci$bp[i],best_del[c(1,3)])
-      d_lower <- confint_del(pt,10,0.3,250,c(0.05,-0.4),dfci$bp[i],best_del[c(1,3)])
-      d_upper <- confint_del(pt,10,0.3,250,c(best_del[1]+0.1,0.01),dfci$bp[i],best_del[c(1,3)])
+      dfci$upper[i] <- confint_b(pt,n_locs,0.3,250,dfci$bp[i]+0.2,dfci$bp[i],best_del[c(1,3)])
+      dfci$lower[i] <- confint_b(pt,n_locs,0.3,250,dfci$bp[i]-0.2,dfci$bp[i],best_del[c(1,3)])
+      d_lower <- confint_del(pt,n_locs,0.3,250,c(0.05,-0.4),dfci$bp[i],best_del[c(1,3)])
+      d_upper <- confint_del(pt,n_locs,0.3,250,c(best_del[1]+0.1,0.01),dfci$bp[i],best_del[c(1,3)])
       dfcid$lower_e[i] <- d_lower[1]
       dfcid$upper_e[i] <- d_upper[1]
       dfcid$lower_i[i] <- d_lower[2]
       dfcid$upper_i[i] <- d_upper[2]
     }
     
-    dfci$pval[i] <- permute_p_value_b(pt,10,0.3,200,best_del[c(1,3)])
+    dfci$pval[i] <- permute_p_value_b(pt,n_locs,0.3,200,best_del[c(1,3)])
   }
   
   rm(pt)
-  if(i %% 10 == 0){
-    saveRDS(dfci,paste0(getwd(),"/results/dfci_b03_dis.RDS"))
-    saveRDS(dfcid,paste0(getwd(),"/results/dfcid_b03_dis.RDS"))
+  if(save_data & i %% 10 == 0){
+    saveRDS(dfci,paste0(getwd(),"/results/dfci_b",gsub("\\.|-","",as.character(beta)),"_dis.RDS"))
+    saveRDS(dfcid,paste0(getwd(),"/results/dfcid_b",gsub("\\.|-","",as.character(beta)),"_dis.RDS"))
   }
 }
-
-dfci60 <- dfci
-dfcid60 <- dfcid
 
