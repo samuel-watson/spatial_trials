@@ -11,7 +11,7 @@ source(paste0(getwd(),"/solarized.R"))
 Rcpp::sourceCpp("src/perm_test.cpp")
 
 # flags for data
-use_data <- TRUE # use the simulated saved data
+use_data <- FALSE # use the simulated saved data
 save_data <- TRUE # save newly created data
 
 #SIMULATION PARAMETERS
@@ -22,11 +22,11 @@ max_de <- function(n_locs){
 }
 
 beta <- -0.3 # max absolute intervention effect
-max_dist <- 0.3
+max_dist <- 0.2
 radius <- 0.2
-n_locs <- 8
+n_locs <- 12
 n_seed <- 10
-n_child <- 100
+n_child <- 101
 cov_pars <- c(0.25,0.5) # G.P. variance, length scale
 del_e_ul <- max_de(n_locs)
 
@@ -202,7 +202,7 @@ del_e <- 0.2
 del_i <- 0.1
 n_locs <- 8
 max_del <- max_de(n_locs)
-adjust <- FALSE
+adjust <- TRUE
 
 #test
 dfp <- generate_intervention(dfp, del_e, del_i, -0.3, n_locs, TRUE)
@@ -216,7 +216,7 @@ if(adjust){
     family = gaussian()
   )
   
-  form <- "~ twoway2(distance,8,4,50) + d1 + d2 + d3 + (1|hsgp_fexp(X,Y))"
+  form <- "~ twoway2(distance,8,4,50) + d1 + d2 + d3"
   form2 <- "sim_y ~ fn + d1 + d2 + d3"
 } else {
   model2b <- Model$new(
@@ -227,7 +227,7 @@ if(adjust){
     family = gaussian()
   )
   
-  form <- "~ twoway2(distance,8,4,50) + (1|hsgp_fexp(X,Y))"
+  form <- "~ twoway2(distance,8,4,50)"
   form2 <- "sim_y ~ fn"
 }
 
@@ -277,16 +277,16 @@ for(zz in 1:1000){
                                lower.bound = lbound,
                                upper.bound = ubound),
                    error = function(i)return(list()))
-  se <- tryCatch(sqrt(diag(solve(model2$information_matrix())))[2], error = function(e)return(NA))
+  se <- tryCatch(sqrt(diag(solve(model2$information_matrix(hessian.corr = "none"))))[2], error = function(e)return(NA))
   pvals_ml <- c(pvals_ml, 2*(1-pnorm(abs(fit2$coefficients$est[2]/se))))
 
   pval_new <- permute_p_value_b(pt,n_locs,0.3,200,c(0.2,0.1))
   pvals <- c(pvals, pval_new)
   rm(pt)
   
-  if(save_data & i %% 10){
+  if(save_data & zz %% 10){
     saveRDS(pvals,paste0(getwd(),"/results/pvals_b0",ifelse(adjust,"adj",""),"_dis.RDS"))
-    #saveRDS(pvals_ml,paste0(getwd(),"/results/pvals_ml_b0",ifelse(adjust,"adj",""),"_dis.RDS"))
+    saveRDS(pvals_ml,paste0(getwd(),"/results/pvals_ml_b0",ifelse(adjust,"adj",""),"_dis.RDS"))
   }
 }
 
@@ -297,30 +297,25 @@ mean(pvals < 0.05)
 dfci <- data.frame(iter = 1:1000, lower = NA, upper = NA, lower_ml = NA, upper_ml = NA, b= NA, bp = NA, pval = NA)
 dfcid <- data.frame(iter = 1:1000, lower_e = NA, upper_e = NA, lower_ml_e = NA, upper_ml_e = NA, lower_i = NA, upper_i = NA, lower_ml_i = NA, upper_ml_i = NA, d_e = NA, dp_e =NA, d_i = NA, dp_i =NA)
 
-spde <- make_mesh(dfanal, xy_cols = c("X","Y"), cutoff = 0.05)
-beta <- -0.6
+beta <- -0.3
 n_locs <- 12
 
+fn2 <- function(x,d1,d2,d3,int,b,del_e, del_i, b_d1, b_d2, b_d3){
+  int + d1*b_d1 + d2*b_d2 + d3*b_d3 + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
+}
 
 for(i in 1:1000){
   cat("\nITER: ",i,"\n")
   dfp <- generate_intervention(dfp, del_e, del_i, beta, n_locs, FALSE)
   dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
   
-  if(adjust){
-    fitTMB <- sdmTMB(sim_y ~ d1 + d2 + d3, data = dfanal, mesh = spde)
-    ypred <- fitted(fitTMB)
-  } else {
-    ypred <- mean(dfanal$sim_y)
-  }
-  
-  pt <- new_r_stat(dfanal$sim_y-ypred,t(B),dfanal$distance,dists_i,c(0.01),c(0.4),c(-0.2),c(0.0),50,4,8,dfanal$t)
+  #pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),t(B),dfanal$distance,dists_i,c(0.01),c(0.4),c(-0.2),c(0.0),50,4,8,dfanal$t)
   
   mean_pars <- c(0.01,-0.01, 0.10, 0.10)
   if(adjust) mean_pars <- c(mean_pars,rep(0.05,3))
   # # maximum likelihood model
   model2 <- Model$new(
-    as.formula(form),
+    as.formula(paste0(form," + (1|hsgp_fexp(X,Y))")),
     data=dfanal,
     covariance = cov_pars,
     mean = mean_pars,
@@ -347,15 +342,50 @@ for(i in 1:1000){
     b0 <- fit2$coefficients$est[2]
     di0 <- fit2$coefficients$est[3]
     de0 <- fit2$coefficients$est[4]
-
-    dfci$lower_ml[i] = fit2$coefficients$lower[2]
-    dfci$upper_ml[i] = fit2$coefficients$upper[2]
-    dfcid$lower_ml_i[i] = fit2$coefficients$lower[3]
-    dfcid$upper_ml_i[i] = fit2$coefficients$upper[3]
-    dfcid$lower_ml_e[i] = fit2$coefficients$lower[4]
-    dfcid$upper_ml_e[i] = fit2$coefficients$upper[4]
-    M <- model2$information_matrix(hessian.corr = "none")
+    
+    model2b <- Model$new(
+      as.formula(paste0(form," + (1|fexp(X,Y))")),
+      data=dfanal,
+      covariance = model2$covariance$parameters,
+      mean = model2$mean$parameters,
+      family = gaussian()
+    )
+    model2b$update_y(dfanal$sim_y)
+    M <- model2b$information_matrix(hessian.corr = "none")
     se <- sqrt(diag(solve(M)))
+    
+    f1 <- model2b$fitted()
+    r2 <- dfanal$sim_y - f1
+    S1 <- model2b$Sigma(FALSE)
+    L <- t(chol(S1))
+    sr2 <- solve(L)%*%r2
+    
+    fitn <- tryCatch(nls(sim_y ~ fn2(distance, d1, d2, d3, int,b, del_e, del_i, b_d1, b_d2, b_d3),data = dfanal, 
+                         start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_d1 = 0.0, b_d2 = 0.0, b_d3 = 0.0),
+                         lower = c(-10,-10,0.01,0.0,-10,-10,-10), upper = c(10,10,1.0,0.5,10,10,10), algorithm = "port"), error = function(i)return(NA))
+    if(is(fitn,"nls")){
+      np <- fitn$m$getPars()
+      dfci$bp[i] <- np[2]
+      dfcid$dp_e[i] <- np[3]
+      dfcid$dp_i[i] <- np[4]
+    }
+    
+    b1 <- c()
+    b2 <- c()
+    b3 <- c()
+    for(j in 1:200){
+      dfanal$ystar <- f1 + L%*%(sr2[sample(1:length(sr2),replace = TRUE)])
+      fitn <- tryCatch(nls(ystar ~ fn2(distance, d1, d2, d3, int,b, del_e, del_i, b_d1, b_d2, b_d3),data = dfanal, 
+                           start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_d1 = 0.0, b_d2 = 0.0, b_d3 = 0.0),
+                           lower = c(-10,-10,0.01,0.0,-10,-10,-10), upper = c(10,10,1.0,0.5,10,10,10), algorithm = "port"), error= function(i)return(NA))
+      if(is(fitn,"nls")){
+        np <- fitn$m$getPars()
+        b1 <- c(b1, np[2])
+        b2 <- c(b2, np[3])
+        b3 <- c(b3, np[4])
+      }
+      cat("\rIter: ",j)
+    }
     
     dfci$lower_ml[i] = fit2$coefficients$est[2] - qnorm(0.975)*se[2]
     dfci$upper_ml[i] = fit2$coefficients$est[2] + qnorm(0.975)*se[2]
@@ -364,68 +394,23 @@ for(i in 1:1000){
     dfcid$lower_ml_e[i] = fit2$coefficients$est[4] -qnorm(0.975)*se[4]
     dfcid$upper_ml_e[i] = fit2$coefficients$est[4] +qnorm(0.975)*se[4]
     
+    dfci$lower[i] = quantile(b1,0.025)
+    dfci$upper[i] = quantile(b1,0.975)
+    dfcid$lower_i[i] = quantile(b2,0.025)
+    dfcid$upper_i[i] = quantile(b2,0.975)
+    dfcid$lower_e[i] = quantile(b3,0.025)
+    dfcid$upper_e[i] = quantile(b3,0.975)
+    
     dfci$b[i] <- b0
     dfcid$d_i[i] <- di0
     dfcid$d_e[i] <- de0
-    dfci$pval[i] <- tryCatch(permute_p_value_b(pt,n_locs,0.3,200,c(de0,di0)), error = function(i)return(NA))
+    #dfci$pval[i] <- tryCatch(permute_p_value_b(pt,n_locs,0.3,200,c(de0,di0)), error = function(i)return(NA))
   }
-  # 
-  # best_del <- optim_r(pt,c(0.2,0.1))
-  # dfcid$dp_e[i] <- best_del[1]
-  # dfcid$dp_i[i] <- best_del[3]
-
-  # dfanal$fn <- fun(dfanal$distance,50,4,8,best_del[c(1,3)],1,dfanal$t)
   
-  # if(!any(!is.finite(dfanal$fn)|is.na(dfanal$fn))){
-  #   
-  #   # model2b <- Model$new(
-  #   #   ~ fn + (1|hsgp_fexp(X,Y)),
-  #   #   data=dfanal,
-  #   #   covariance = cov_pars,
-  #   #   mean = c(0.01,-0.4),
-  #   #   family = gaussian()
-  #   # )
-  #   # 
-  #   # # model2$set_trace(1)
-  #   # model2b$covariance$hsgp(m = c(20,20), L = c(1.2,1.2))
-  #   # model2b$update_parameters(cov.pars = cov_pars)
-  #   # 
-  #   # fit2b <- tryCatch(model2b$MCML(y = dfp$sim_y, 
-  #   #                                lower.bound = c(-10,-10), 
-  #   #                                upper.bound = c(10,10)),
-  #   #                   error = function(i)return(list()))
-  #   
-  #   fitTMB <- sdmTMB(as.formula(form2), data = dfanal, mesh = spde)
-  #   
-  #   # dfci$bp[i] <- fitTMB$last.par.best[2] #fit2b$coefficients$est[2]
-  #   # dfci$upper[i] <- tryCatch(confint_b(pt,n_locs,0.3,250,dfci$bp[i]+0.2,dfci$bp[i],best_del[c(1,3)],TRUE), error = function(i)return(NA))
-  #   # dfci$lower[i] <- tryCatch(confint_b(pt,n_locs,0.3,250,dfci$bp[i]-0.2,dfci$bp[i],best_del[c(1,3)],TRUE), error = function(i)return(NA))
-  #   # d_lower <- tryCatch(confint_del(pt,n_locs,0.3,250,c(0.05,-0.4),dfci$bp[i],best_del[c(1,3)],TRUE), error = function(i)return(NA))
-  #   # d_upper <- tryCatch(confint_del(pt,n_locs,0.3,250,c(best_del[1]+0.1,0.01),dfci$bp[i],best_del[c(1,3)],TRUE), error = function(i)return(NA))
-  #   # dfcid$lower_e[i] <- d_lower[1]
-  #   # dfcid$upper_e[i] <- d_upper[1]
-  #   # dfcid$lower_i[i] <- d_lower[2]
-  #   # dfcid$upper_i[i] <- d_upper[2]
-  #   
-  #   # if(is(fit2b,"mcml")){
-  #   #   dfci$bp[i] <- fitTMB$last.par.best[2] #fit2b$coefficients$est[2]
-  #   #   dfci$upper[i] <- confint_b(pt,n_locs,0.3,250,dfci$bp[i]+0.2,dfci$bp[i],best_del[c(1,3)])
-  #   #   dfci$lower[i] <- confint_b(pt,n_locs,0.3,250,dfci$bp[i]-0.2,dfci$bp[i],best_del[c(1,3)])
-  #   #   d_lower <- confint_del(pt,n_locs,0.3,250,c(0.05,-0.4),dfci$bp[i],best_del[c(1,3)])
-  #   #   d_upper <- confint_del(pt,n_locs,0.3,250,c(best_del[1]+0.1,0.01),dfci$bp[i],best_del[c(1,3)])
-  #   #   dfcid$lower_e[i] <- d_lower[1]
-  #   #   dfcid$upper_e[i] <- d_upper[1]
-  #   #   dfcid$lower_i[i] <- d_lower[2]
-  #   #   dfcid$upper_i[i] <- d_upper[2]
-  #   # }
-  #   
-  #   dfci$pval[i] <- tryCatch(permute_p_value_b(pt,n_locs,0.3,200,best_del[c(1,3)]), error = function(i)return(NA))
-  # }
-  
-  rm(pt)
+  #rm(pt)
   if(save_data & i %% 10 == 0){
-    saveRDS(dfci,paste0(getwd(),"/results/dfci_b",gsub("\\.|-","",as.character(beta)),ifelse(adjust,"adj",""),"_dis.RDS"))
-    saveRDS(dfcid,paste0(getwd(),"/results/dfcid_b",gsub("\\.|-","",as.character(beta)),ifelse(adjust,"adj",""),"_dis.RDS"))
+    saveRDS(dfci,paste0(getwd(),"/results/dfci101_b",gsub("\\.|-","",as.character(beta)),ifelse(adjust,"adj",""),"_dis.RDS"))
+    saveRDS(dfcid,paste0(getwd(),"/results/dfcid101_b",gsub("\\.|-","",as.character(beta)),ifelse(adjust,"adj",""),"_dis.RDS"))
   }
 }
 
