@@ -9,6 +9,7 @@ source(paste0(getwd(),"/solarized.R"))
 # load required functions
 Rcpp::sourceCpp("src/perm_test.cpp")
 
+
 df <- read.csv(paste0(getwd(),"/data/binka_compounds.csv"))
 df <- df[df$expected > 0 ,]
 df$t <- 1
@@ -174,6 +175,8 @@ n_locs <- sum(dfpoly$arm=="intervention")
 pt <- new_r_stat(dfanal$sim_y-0.02165-dfanal$expected,t(B),dfanal$distance,dists_i,0.01,2,c(-1),c(0),50,4,8,1)
 permute_p_value_b(pt,n_locs,0,200,c(0.5,-0.02))
 
+# fit full model, no adjustment
+
 model <- Model$new(
   ~ twoway2(distance,8,4,50) + (1|hsgp_fexp(x_re,y_re)),
   data=dfanal,
@@ -193,17 +196,66 @@ fit0 <- model$MCML(y = dfanal$deaths,
 
 fit0
 
+# bootstrapped confidence intervals
+
+# get full covariance matrix
+
+# this is slow due to the size of the matrices, requires ~8 GB of memory
+model00 <- Model$new(
+  ~ twoway2(distance,8,4,50) + (1|fexp(x_re,y_re)),
+  data=dfanal,
+  covariance = model$covariance$parameters,
+  mean = model$mean$parameters,
+  offset = dfanal$expected,
+  family = gaussian()
+)
+
+L <- t(chol(model$Sigma()))
+f0 <- model00$fitted()
+rm(model00)
+
+# check NLS
+
+fn0 <- function(x,int,b,del_e, del_i){
+  int + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
+}
+
+fitn <- nls(deaths ~ fn0(distance, int,b, del_e, del_i),data = dfanal, 
+    start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1),
+    lower = c(-10,-10,0.01,0.0), upper = c(10,10,1.0,0.5), algorithm = "port")
+
+f01 <- fitted(fitn)
+
+genrep <- function(dfanal,f1,L){
+  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
+  fitn <- tryCatch(nls(ystar ~ fn0(distance, int,b, del_e, del_i),data = dfanal, 
+                       start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1),
+                       lower = c(-10,-10,0.01,0.0), upper = c(10,10,3.0,1.5), algorithm = "port"), error= function(i)return(NA))
+  if(is(fitn,"nls")){
+    np <- fitn$m$getPars()
+  } else {
+    np <- rep(NA, 3)
+  }
+  return(np)
+}
+
+genrep(dfanal, f01, L)
+
+res <- pbapply::pbreplicate(1000, genrep(dfanal,f01, L))
+res <- Reduce(rbind, res)
+
+fit0$coefficients$est[2] + sd(res[,2], na.rm=T)*qnorm(0.975)
+fit0$coefficients$est[2] - sd(res[,2], na.rm=T)*qnorm(0.975)
+
+fit0$coefficients$est[3] + sd(res[,4], na.rm=T)*qnorm(0.975)
+fit0$coefficients$est[3] - sd(res[,4], na.rm=T)*qnorm(0.975)
+
+fit0$coefficients$est[4] + sd(res[,3], na.rm=T)*qnorm(0.975)
+fit0$coefficients$est[4] - sd(res[,3], na.rm=T)*qnorm(0.975)
 #extract the information matrix for later plotting
 
 M <- model$information_matrix()
 rm(model)
-
-# use these standard errors until the package is updated:
-se <- sqrt(diag(solve(model$information_matrix())))
-
-fit0$coefficients$est[1:4] + qnorm(0.975)*se[1:4]
-fit0$coefficients$est[1:4] - qnorm(0.975)*se[1:4]
-2*(1-pnorm(abs(fit0$coefficients$est[2]/se[2])))
 
 # need to add model that controls for potential distance - either: 
 # i) distance indicators; ii) smooth function
@@ -215,6 +267,8 @@ for(i in 0:8){
 dfanal$distance_all_sq <- dfanal$distance_all^2
 
 # distance indicator model
+
+
 
 model2a <- Model$new(
   ~ twoway2(distance,8,4,50) + distance_all1 + distance_all2 + distance_all3 + distance_all4 + (1|hsgp_fexp(x_re,y_re)),
@@ -235,6 +289,46 @@ fit2a <- model2a$MCML(y = dfanal$deaths,
 
 fit2a
 
+# check NLS
+
+fn2a <- function(x,d1,d2,d3,d4,int,b,del_e, del_i, b_d1, b_d2,b_d3,b_d4){
+  int + d1*b_d1 + d2*b_d2 + d3*b_d3 + d4*b_d4 + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
+}
+
+fitn <- nls(deaths ~ fn2a(distance,distance_all1,distance_all2,distance_all3,distance_all4, int,b, del_e, del_i,b_1, b_2,b_3,b_4),data = dfanal, 
+            start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_1 = 0, b_2 = 0,b_3 = 0, b_4 = 0),
+            lower = c(-10,-10,0.01,0.0,rep(-10,4)), upper = c(10,10,1.0,0.5,rep(10,4)), algorithm = "port")
+
+f02a <- fitted(fitn)
+f2a <- model2a$fitted()
+
+genrep <- function(dfanal,f1,L){
+  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
+  fitn <- tryCatch(nls(ystar ~ fn2a(distance,distance_all1,distance_all2,distance_all3,distance_all4, int,b, del_e, del_i,b_1, b_2,b_3,b_4),data = dfanal, 
+                       start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_1 = 0, b_2 = 0,b_3 = 0, b_4 = 0),
+                       lower = c(-10,-10,0.01,0.0,rep(-10,4)), upper = c(10,10,4.0,1.5,rep(10,4)), algorithm = "port"), error= function(i)return(NA))
+  if(is(fitn,"nls")){
+    np <- fitn$m$getPars()
+  } else {
+    np <- rep(NA, 8)
+  }
+  return(np)
+}
+
+genrep(dfanal, f2a, L)
+
+res <- pbapply::pbreplicate(1000, genrep(dfanal,f2a, L))
+res <- Reduce(rbind, res)
+
+fit2a$coefficients$est[2] + sd(res[,2], na.rm=T)*qnorm(0.975)
+fit2a$coefficients$est[2] - sd(res[,2], na.rm=T)*qnorm(0.975)
+
+fit2a$coefficients$est[3] + sd(res[,4], na.rm=T)*qnorm(0.975)
+fit2a$coefficients$est[3] - sd(res[,4], na.rm=T)*qnorm(0.975)
+
+fit2a$coefficients$est[4] + sd(res[,3], na.rm=T)*qnorm(0.975)
+fit2a$coefficients$est[4] - sd(res[,3], na.rm=T)*qnorm(0.975)
+
 M2a <- model2a$information_matrix()
 rm(model2a)
 # degree-2 polynomial adjustment
@@ -242,7 +336,7 @@ rm(model2a)
 model2b <- Model$new(
   ~ twoway2(distance,8,4,50) + distance_all + distance_all_sq + (1|hsgp_fexp(x_re,y_re)),
   data=dfanal,
-  covariance = c(0.07511, 0.14205),
+  covariance = c(0.05, 0.16),
   mean = c(0.3, -0.3, 0.2, 0.98, 0.01, 0.01),
   offset = dfanal$expected,
   family = gaussian()
@@ -257,6 +351,45 @@ fit2b <- model2b$MCML(y = dfanal$deaths,
                       upper.bound = c(10,10,2,2,10,10))
 
 fit2b
+
+
+fn2b <- function(x,d1,d2,int,b,del_e, del_i, b_d1, b_d2){
+  int + d1*b_d1 + d2*b_d2 + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
+}
+
+fitn <- nls(deaths ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, del_i,b_1, b_2),data = dfanal, 
+            start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_1 = 0, b_2 = 0),
+            lower = c(-10,-10,0.01,0.0,rep(-10,2)), upper = c(10,10,1.0,0.5,rep(10,2)), algorithm = "port")
+
+f02b <- fitted(fitn)
+f2b <- model2b$fitted()
+
+genrep <- function(dfanal,f1,L){
+  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
+  fitn <- tryCatch(nls(ystar ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, del_i,b_1, b_2),data = dfanal, 
+                       start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_1 = 0, b_2 = 0),
+                       lower = c(-10,-10,0.01,0.0,rep(-10,2)), upper = c(10,10,1.0,0.5,rep(10,2)), algorithm = "port"), error= function(i)return(NA))
+  if(is(fitn,"nls")){
+    np <- fitn$m$getPars()
+  } else {
+    np <- rep(NA, 6)
+  }
+  return(np)
+}
+
+genrep(dfanal, f2b, L)
+
+res <- pbapply::pbreplicate(100, genrep(dfanal,f2b, L))
+# res <- Reduce(rbind, res)
+
+fit2b$coefficients$est[2] + sd(res[2,], na.rm=T)*qnorm(0.975)
+fit2b$coefficients$est[2] - sd(res[2,], na.rm=T)*qnorm(0.975)
+
+fit2b$coefficients$est[3] + sd(res[4,], na.rm=T)*qnorm(0.975)
+fit2b$coefficients$est[3] - sd(res[4,], na.rm=T)*qnorm(0.975)
+
+fit2b$coefficients$est[4] + sd(res[3,], na.rm=T)*qnorm(0.975)
+fit2b$coefficients$est[4] - sd(res[3,], na.rm=T)*qnorm(0.975)
 
 M2b <- model2b$information_matrix()
 rm(model2b)
@@ -280,9 +413,9 @@ df1$distance_all_sq <- 0
 df1$distance_all <- 0
 
 #df1$y <- fn(df1$distance[1:100],-50,2.05801,16, 1.58349, 0.15759 ,-0.29911)
-df1$y <- c(fn(df1$distance[1:100],-50,4,8,fit0$coefficients$est[3], fit0$coefficients$est[4] ,fit0$coefficients$est[2]), 
-  fn(df1$distance[1:100],-50,4,8, fit2a$coefficients$est[3] , fit2a$coefficients$est[4] ,fit2a$coefficients$est[2]) , 
- fn(df1$distance[1:100],-50,4,8, fit2b$coefficients$est[3], fit2b$coefficients$est[4] ,fit2b$coefficients$est[2])) 
+df1$y <- c(fn(df1$distance[1:100],-50,4,8,fit0$coefficients$est[4], fit0$coefficients$est[3] ,fit0$coefficients$est[2]), 
+  fn(df1$distance[1:100],-50,4,8, fit2a$coefficients$est[4] , fit2a$coefficients$est[3] ,fit2a$coefficients$est[2]) , 
+ fn(df1$distance[1:100],-50,4,8, fit2b$coefficients$est[4], fit2b$coefficients$est[3] ,fit2b$coefficients$est[2])) 
 
 df1$cl <- sample(1:10,nrow(df1),replace=TRUE)
 df1$se <- NA
@@ -336,8 +469,6 @@ df1$se[201:300] <- sqrt(diag(X0%*%M2bi%*%t(X0)))
 df1$lci[201:300] <- df1$y[201:300] - qnorm(0.975)*df1$se[201:300]
 df1$uci[201:300] <- df1$y[201:300] + qnorm(0.975)*df1$se[201:300]
 rm(modeld)
-
-## discrete indicators
 
 p4 <- ggplot()+
   geom_hline(yintercept = 0,lty=2)+
