@@ -24,12 +24,13 @@ max_de <- function(n_locs){
 # set simulation parameters
 # if data already exists with these parameters and use_data == TRUE then it will instead be loaded
 n_seed <- 10
-n_child <- 300
+n_child <- 100
 cov_pars <- c(0.25,0.5) # G.P. variance, length scale
-misspec <- TRUE # whether to use misspecified dgp
-
+misspec <- FALSE
 
 # GENERATE BASE DATA INCL. SAMPLE POINTS AND LATENT SURFACE
+
+
 
 # if prior data exists
 if(use_data){
@@ -60,20 +61,19 @@ if(use_data){
   dfp <- cbind(dfp,dfp_coord)
   dfp$t <- 1
   
-  mod <- Model$new(
-    ~ (1|fexp(X,Y)),
-    data = as.data.frame(dfp)[,c("X","Y")],
-    covariance = cov_pars,
-    mean = c(0),
-    family = gaussian()
-  )
-  
-  sim_data <- mod$sim_data(type="all")
-  dfp$u <- sim_data$u
-  rm(mod)
-  
   if(save_data) saveRDS(dfp,paste0(getwd(),"/data/data_",cov_pars[1],"_",cov_pars[2],"_",n_seed,n_child,"cont_sp.RDS"))
 }
+
+mod <- Model$new(
+  ~ (1|fexp(X,Y)),
+  data = as.data.frame(dfp)[,c("X","Y")],
+  covariance = cov_pars,
+  mean = c(0),
+  family = gaussian()
+)
+
+L <- t(chol(mod$Sigma())) # get cholesky decomposition of coviarance matrix
+rm(mod)
 
 # plot the locations
 
@@ -112,11 +112,10 @@ generate_intervention <- function(data, max_dist, beta, n_locs, plot = TRUE){
   data$distance <- apply(all_dists[,which(data$intervention==1)],1,min)
   
   # generate intervention effect
-  # data$fn <- fun(data$distance,50,4,8,c(max_dist),1,data$t,misspec)
-  data$y_true <- fn(data$distance,0,beta,max_dist)#data$fn * beta
+  data$fn <- fun(data$distance,50,4,8,c(max_dist),1,data$t,misspec)
+  data$y_true <- data$fn * beta
   # simulate outcome data
-  data$sim_y <- data$y_true + L%*%rnorm(nrow(data))#data$u
-  #data$sim_y <- rnorm(nrow(data),data$sim_p)
+  data$sim_y <- data$y_true + L%*%rnorm(nrow(data))
   
   if(plot){
     p_dist <- ggplot()+
@@ -142,44 +141,26 @@ generate_intervention <- function(data, max_dist, beta, n_locs, plot = TRUE){
     p_p <- ggplot()+
       geom_sf(data=data, aes(color = sim_y), size = 0.1)+
       geom_sf(data=data[data$intervention==1,],color="red",size=2)+
-      scico::scale_color_scico(palette = "roma", name = "Simulated\nprobability")+
+      scico::scale_color_scico(palette = "roma", name = "Value")+
       theme_solar()+
-      ggtitle("Probability of outcome")
+      ggtitle("Simulated outcome")
     
     print( (p_dist + p_int) / (p_u + p_p) )
   }
   return(data)
 }
 
+# test function & visualise
+dfp <- generate_intervention(dfp, 0.3, -0.3, 15, TRUE)
+
+
+##########################################################
+########### PERMUTATION TEST #############################
 # simulation parameter values
 beta <- 0
 del_e <- 0.3
 n_locs <- 8
 max_del <- max_de(n_locs)
-
-model2b <- Model$new(
-  ~ (1|fexp(X,Y)),
-  data=as.data.frame(dfp),
-  covariance = cov_pars,
-  mean = 0,
-  family = gaussian()
-)
-S <- model2b$Sigma()
-
-L <- t(chol(S))
-rm(model2b)
-
-# test function & visualise
-dfp <- generate_intervention(dfp, 0.3, -0.3, 12, TRUE)
-
-
-##########################################################
-########### PERMUTATION TEST #############################
-## TEST CPP
-dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
-
-
-
 
 pvals <- c()
 pvals_ml <- c()
@@ -190,24 +171,24 @@ for(zz in 1:1000){
   pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),t(B),dfanal$distance,all_dists,0.01,max_del,c(0),c(0),50,4,8,dfanal$t)
   
   # # # maximum likelihood model
-  # model2 <- Model$new(
-  #   ~ twoway0(distance,8,4,50) + (1|hsgp_fexp(X,Y)),
-  #   data=dfanal,
-  #   covariance = cov_pars,
-  #   mean = c(0.01,-0.01, 0.10),
-  #   family = gaussian()
-  # )
-  # 
-  # # model2$set_trace(1)
-  # model2$covariance$hsgp(m = c(10,10), L = c(1.05,1.05))
-  # model2$update_parameters(cov.pars = cov_pars)
-  # 
-  # fit2 <- tryCatch(model2$MCML(y = dfp$sim_y,
-  #                              lower.bound = c(-10,-10,0.01),
-  #                              upper.bound = c(10,10,10)),
-  #                  error = function(i)return(list()))
-  # se <- tryCatch(sqrt(diag(solve(model2$information_matrix())))[2], error = function(e)return(NA))
-  # pvals_ml <- c(pvals_ml, 2*(1-pnorm(abs(fit2$coefficients$est[2]/se))))
+  model2 <- Model$new(
+    ~ twoway0(distance,8,4,50) + (1|hsgp_fexp(X,Y)),
+    data=dfanal,
+    covariance = cov_pars,
+    mean = c(0.01,-0.01, 0.10),
+    family = gaussian()
+  )
+
+  # model2$set_trace(1)
+  model2$covariance$hsgp(m = c(10,10), L = c(1.05,1.05))
+  model2$update_parameters(cov.pars = cov_pars)
+
+  fit2 <- tryCatch(model2$MCML(y = dfp$sim_y,
+                               lower.bound = c(-10,-10,0.01),
+                               upper.bound = c(10,10,10)),
+                   error = function(i)return(list()))
+  se <- tryCatch(sqrt(diag(solve(model2$information_matrix())))[2], error = function(e)return(NA))
+  pvals_ml <- c(pvals_ml, 2*(1-pnorm(abs(fit2$coefficients$est[2]/se))))
   
   pval_new <- permute_p_value_b(pt,n_locs,0.3,200,0.3)
   pvals <- c(pvals, pval_new)
@@ -224,18 +205,12 @@ mean(pvals_ml < 0.05)
 #################
 # CONFIDENCE INTERVALS
 
-dfci <- data.frame(iter = 1:1000, lower = NA, upper = NA,lower2 = NA, upper2 = NA, lower_ml = NA, upper_ml = NA, b= NA, bp = NA, pval = NA)
-dfcid <- data.frame(iter = 1:1000, lower = NA, upper = NA,lower2 = NA, upper2 = NA, lower_ml = NA, upper_ml = NA, d = NA, dp =NA)
+dfci <- data.frame(iter = 1:1000, lower = NA, upper = NA,lower_ml = NA, upper_ml = NA, b= NA, bp = NA, pval = NA)
+dfcid <- data.frame(iter = 1:1000, lower = NA, upper = NA,lower_ml = NA, upper_ml = NA, d = NA, dp =NA)
 
 fn <- function(x,int,b,del){
   int + b*((1-((-1/50)*log(exp(-50*x/del) + exp(-50)))^4)^8)
 }
-# require(sdmTMB)
-# spde <- make_mesh(dfanal, xy_cols = c("X","Y"), cutoff = 0.05)
-
-beta <- -0.3
-del_e <- 0.3
-n_locs <- 12
 
 cl <- parallel::makeCluster(6)
 
@@ -258,102 +233,88 @@ genrep <- function(dfanal,f1,L,r){
 
 parallel::clusterExport(cl,c('fn','L','genrep'))
 
-for(i in 1:500){
-  cat("\nITER: ",i,"\n")
+beta <- -0.6
+del_e <- 0.3
+n_locs <- 8
+Li <- solve(L)
+
+for(i in 1:100){
+  cat("\rITER: ",i)
   
   dfp <- generate_intervention(dfp, del_e, beta, n_locs, FALSE)
   dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
+  pt <- new_r_stat(dfanal$sim_y - mean(dfanal$sim_y),Li,dfanal$distance,all_dists,0.01,0.44,0,0,50,4,8,dfanal$t) # update_y(pt,dfanal$sim_y-mean(dfanal$sim_y),dfanal$distance)
   
-  # b0 <- fit2$coefficients$est[2]
-  # d0 <- fit2$coefficients$est[3]
+  # fit the model using HSGP approximation then calculate proper SEs below
+  
+  model2 <- Model$new(
+    ~ twoway0(distance,8,4,10) + (1|hsgp_fexp(X,Y)),
+    data=dfanal,
+    covariance = cov_pars,
+    mean = c(0.01,-0.01, del_e),
+    family = gaussian()
+  )
+
+  # model2$set_trace(1)
+  model2$covariance$hsgp(m = c(10,10), L = c(1.05,1.05))
+  model2$update_parameters(cov.pars = cov_pars)
+
+  fit2 <- tryCatch(model2$MCML(y = dfp$sim_y,
+                               lower.bound = c(-10,-10,0.01),
+                               upper.bound = c(10,10,1.0)),
+                   error = function(i)return(list()))
+  
+  if(is(fit2,"mcml")){
+    
+    b0 <- fit2$coefficients$est[2]
+    d0 <- fit2$coefficients$est[3]
+    dfci$b[i] <- b0
+    dfcid$d[i] <- d0
+    
+    model2b <-  Model$new(
+      ~ twoway0(distance,8,4,10) + (1|fexp(X,Y)),
+      data=dfanal,
+      covariance = model2$covariance$parameters, #model2$covariance$parameters
+      mean = model2$mean$parameters,
+      family = gaussian()
+    )
+    M <- model2b$information_matrix()
+    se <- sqrt(diag(solve(M)))
+    
+    dfci$lower_ml[i] = fit2$coefficients$est[2] - qnorm(0.975)*se[2] #fit2$coefficients$est[2] - qt(0.975, desfac*nrow(dfanal))*se[2]
+    dfci$upper_ml[i] = fit2$coefficients$est[2] + qnorm(0.975)*se[2] 
+    dfcid$lower_ml[i] = fit2$coefficients$est[3] - qnorm(0.975)*se[3] 
+    dfcid$upper_ml[i] = fit2$coefficients$est[3] + qnorm(0.975)*se[3] 
+  }
+  
+  dfci$pval[i] <- tryCatch(permute_p_value_b(pt,n_locs,0.3,200,d0), error = function(i)return(NA))
   
   fitn <- tryCatch(nls(sim_y ~ fn(distance, int, b, del),data = dfanal, 
                        start = list(int = 0, b = -0.2, del = 0.3),
                        lower = c(-10,-10,0.01), upper = c(10,10,1.0), algorithm = "port"), error = function(i)return(NA))
-  
   if(is(fitn,"nls")){
     np <- fitn$m$getPars()
     dfci$bp[i] <- np[2]
     dfcid$dp[i] <- np[3]
     
-    f1 <- fitted(fitn)#model2b$fitted()
-    # r2 <- dfanal$sim_y - f1
-    # S1 <- model2b$Sigma(FALSE)
-    # L <- t(chol(S1))
-    # sr2 <- solve(L)%*%(dfanal$sim_y - f1)
-    
+    f1 <- fitted(fitn)
     parallel::clusterExport(cl,c('dfanal','f1'))
     res <- pbapply::pbreplicate(500, genrep(dfanal,f1,as.matrix(L)), cl = cl)
     
-    # b1 <- c()
-    # b2 <- c()
-    # for(j in 1:200){
-    #   dfanal$ystar <- f1 + L%*%(rnorm(length(sr2))) #sr2[sample(1:length(sr2),replace = TRUE)]
-    #   fitn <- tryCatch(nls(ystar ~ fn(distance, int, b, del),data = dfanal,
-    #                        start = list(int = 0, b = -0.2, del = 0.2),
-    #                        lower = c(-10,-10,0.01), upper = c(10,10,1.0), algorithm = "port"), error= function(i)return(NA))
-    #   if(is(fitn,"nls")){
-    #     np <- fitn$m$getPars()
-    #     b1 <- c(b1, np[2])
-    #     b2 <- c(b2, np[3])
-    #   }
-    #   cat("\rITER: ",i," | Boot: ",j)
-    # }
+    dfci$lower[i] = quantile(res[2,],0.025,na.rm=TRUE) 
+    dfci$upper[i] = quantile(res[2,],0.975,na.rm=TRUE)
+    dfcid$lower[i] = quantile(res[3,],0.025,na.rm=TRUE)
+    dfcid$upper[i] = quantile(res[3,],0.975,na.rm=TRUE)
     
-    dfci$lower2[i] = np[2] - qnorm(0.975)*sd(res[2,],na.rm=TRUE) #fit2$coefficients$est[2] - qt(0.975, desfac*nrow(dfanal))*se[2]
-    dfci$upper2[i] = np[2] + qnorm(0.975)*sd(res[2,],na.rm=TRUE)
-    dfcid$lower2[i] = np[3] - qnorm(0.975)*sd(res[3,],na.rm=TRUE)
-    dfcid$upper2[i] = np[3] + qnorm(0.975)*sd(res[3,],na.rm=TRUE)
-    
-    dfci$lower_ml[i] = quantile(res[2,],0.025,na.rm=T) #fit2$coefficients$est[2] - qt(0.975, desfac*nrow(dfanal))*se[2]
-    dfci$upper_ml[i] = quantile(res[2,],0.975,na.rm=T)
-    dfcid$lower_ml[i] = quantile(res[3,],0.025,na.rm=T)
-    dfcid$upper_ml[i] = quantile(res[3,],0.975,na.rm=T)
-    # dfci$b[i] <- b0
-    # dfcid$d[i] <- d0
   }
   
+  rm(pt, model2, model2b)
   
   if(save_data & i %% 10 == 0){
-    saveRDS(dfci,paste0(getwd(),"/results/dfci2_b",gsub("\\.|-","",as.character(beta)),"_cont_",n_child,ifelse(misspec,"_mis",""),".RDS"))
-    saveRDS(dfcid,paste0(getwd(),"/results/dfcid2_b",gsub("\\.|-","",as.character(beta)),"_cont",n_child,ifelse(misspec,"_mis",""),".RDS"))
+    saveRDS(dfci,paste0(getwd(),"/results/dfci2_b",gsub("\\.|-","",as.character(beta)),"_cont_",n_child,"_",ifelse(misspec,"mis",""),".RDS"))
+    saveRDS(dfcid,paste0(getwd(),"/results/dfcid2_b",gsub("\\.|-","",as.character(beta)),"_cont",n_child,"_",ifelse(misspec,"mis",""),".RDS"))
   }
 }
 
-
-parallel::stopCluster(cl)
-
-mean(dfcid$lower_ml < 0.25 & dfcid$upper_ml > 0.25, na.rm= T)
-
-mean(dfcid$lower2 < 0.25 & dfcid$upper2 > 0.25, na.rm= T)
-mean(dfcid$dp, na.rm=T)-del_e
+mean(dfcid$lower_ml < 0.3 & dfcid$upper_ml > 0.3, na.rm= T)
 mean(dfci$lower_ml < beta & dfci$upper_ml > beta, na.rm= T)
-mean(dfci$lower2 < beta & dfci$upper2 > beta, na.rm= T)
-mean(dfci$bp, na.rm=T)-beta
-
-b1b <- c()
-b2b <- c()
-for(j in 1:100){
-  dfanal$ystar <- f1 + L%*%(sr2[sample(1:length(sr2),replace = TRUE)])
-  model2$update_parameters(mean.pars = c(0.09,-0.22,0.34))
-  fit2a <- model2$MCML(y = dfanal$ystar,skip.theta = TRUE,
-                               lower.bound = c(-10,-10,0.01),
-                               upper.bound = c(10,10,1.0))
-  if(is(fitn,"nls")){
-    b1b <- c(b1b, fit2a$coefficients$est[2])
-    b2b <- c(b2b, fit2a$coefficients$est[3])
-  }
-  cat("\rIter: ",j)
-}
-
-d1 <- readRDS(paste0(getwd(),"/results/dfci2_b",gsub("\\.|-","",as.character(-0.3)),"_cont_",n_child,"_",ifelse(misspec,"mis",""),".RDS"))
-mean(d1$lower_ml < -0.3 & d1$upper_ml > -0.3, na.rm= T)
-
-# b 0.6 12 locs 0.3
-# > mean(dfcid$lower_ml < 0.3 & dfcid$upper_ml > 0.3, na.rm= T)
-# [1] 0.97
-# > mean(dfcid$dp, na.rm=T)-0.3
-# [1] -0.004060463
-# > mean(dfci$lower_ml < beta & dfci$upper_ml > beta, na.rm= T)
-# [1] 0.996
-# > mean(dfci$bp, na.rm=T)-beta
