@@ -16,17 +16,15 @@ Rcpp::sourceCpp("src/perm_test.cpp")
 
 #SIMULATION PARAMETERS
 
-# Upper bound on Del_E 
-max_de <- function(n_locs){
-  sqrt(8/(n_locs*3*sqrt(3)))
-}
-
 # set simulation parameters
 # if data already exists with these parameters and use_data == TRUE then it will instead be loaded
 n_seed <- 10
 n_child <- 100
 cov_pars <- c(0.25,0.5) # G.P. variance, length scale
 misspec <- TRUE
+del_e <- 0.25
+n_locs <- 16
+max_del <- max_de(n_locs)
 
 # GENERATE BASE DATA INCL. SAMPLE POINTS AND LATENT SURFACE
 
@@ -86,70 +84,6 @@ all_dists <- st_distance(dfp)
 
 # DRF function
 
-fn <- function(x,int,b,del){
-  int + b*((1-((-1/50)*log(exp(-50*x/del) + exp(-50)))^4)^8)
-}
-
-generate_intervention <- function(data, max_dist, beta, n_locs, plot = TRUE){
-  
-  # spatially regulated sampling scheme
-  iter <- 1
-  int_idx <- sample(1:nrow(data),1)
-  while(length(int_idx) < n_locs){
-    int_idx_new <- sample(1:nrow(data),1)
-    dists <- c(all_dists[int_idx,int_idx_new]) #c(st_distance(sampled_locs,dfp[int_idx_new,]))
-    if(min(dists) > max_dist*0.01){ # change this line to implement a randomisation scheme where locations are spatially regulated
-      int_idx <- c(int_idx, int_idx_new)
-    } 
-    iter <- iter + 1
-    if(iter > 500) stop("Iterations exceed max")
-  }
-  
-  data$intervention <- 0
-  data[int_idx,'intervention'] <- 1
-  
-  # generate distances from intervention effect
-  data$distance <- apply(all_dists[,which(data$intervention==1)],1,min)
-  
-  # generate intervention effect
-  data$fn <- fun(data$distance,50,4,8,c(max_dist),1,data$t,misspec)
-  data$y_true <- data$fn * beta
-  # simulate outcome data
-  data$sim_y <- data$y_true + L%*%rnorm(nrow(data))
-  
-  if(plot){
-    p_dist <- ggplot()+
-      geom_sf(data=data, aes(color = distance), size = 0.1)+
-      geom_sf(data=data[data$intervention==1,],color="red",size=2)+
-      scico::scale_color_scico(palette = "batlow", name = "Distance")+
-      theme_solar()+
-      ggtitle("Distance")
-    
-    p_int <- ggplot()+
-      geom_sf(data=data, aes(color = y_true), size = 0.1)+
-      geom_sf(data=data[data$intervention==1,],color="red",size=2)+
-      scico::scale_color_scico(palette = "batlow", name = "True\neffect")+
-      theme_solar()+
-      ggtitle("Intervention effect")
-    
-    p_u <- ggplot()+
-      geom_sf(data=data, aes(color = u), size = 0.1)+
-      scico::scale_color_scico(palette = "batlow", name = "True\neffect")+
-      theme_solar()+
-      ggtitle("Latent spatial effect")
-    
-    p_p <- ggplot()+
-      geom_sf(data=data, aes(color = sim_y), size = 0.1)+
-      geom_sf(data=data[data$intervention==1,],color="red",size=2)+
-      scico::scale_color_scico(palette = "roma", name = "Value")+
-      theme_solar()+
-      ggtitle("Simulated outcome")
-    
-    print( (p_dist + p_int) / (p_u + p_p) )
-  }
-  return(data)
-}
-
 # test function & visualise
 dfp <- generate_intervention(dfp, 0.3, -0.3, 15, TRUE)
 
@@ -158,16 +92,14 @@ dfp <- generate_intervention(dfp, 0.3, -0.3, 15, TRUE)
 ########### PERMUTATION TEST #############################
 # simulation parameter values
 beta <- 0
-del_e <- 0.25
-n_locs <- 16
-max_del <- max_de(n_locs)
+
 Li <- solve(L)
 
 pvals <- c()
 pvals_ml <- c()
 for(zz in 1:1000){
   cat("\nITER: ",zz,"\n")
-  dfp <- generate_intervention(dfp, 0.3, beta, n_locs, FALSE)
+  dfp <- generate_intervention(dfp, 0.3, beta, n_locs, misspec, FALSE)
   dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
   pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),Li,dfanal$distance,all_dists,0.01,max_del,c(0),c(0),50,4,8,dfanal$t)
   
@@ -209,35 +141,16 @@ mean(pvals_ml < 0.05)
 dfci <- data.frame(iter = 1:1000, lower = NA, upper = NA,lower2 = NA, upper2 = NA,lower_ml = NA, upper_ml = NA, b= NA, bp = NA, pval = NA)
 dfcid <- data.frame(iter = 1:1000, lower = NA, upper = NA,lower2 = NA, upper2 = NA,lower_ml = NA, upper_ml = NA, d = NA, dp =NA)
 
-fn <- function(x,int,b,del){
-  int + b*((1-((-1/50)*log(exp(-50*x/del) + exp(-50)))^4)^8)
-}
-
-genrep <- function(dfanal,f1,L,r){
-  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
-  fitn <- tryCatch(nls(ystar ~ fn(distance, int, b, del),data = dfanal, 
-                       start = list(int = 0, b = -0.2, del = 0.2),
-                       lower = c(-10,-10,0.01), upper = c(10,10,1.0), algorithm = "port"), error= function(i)return(NA))
-  if(is(fitn,"nls")){
-    np <- fitn$m$getPars()
-  } else {
-    np <- rep(NA, 3)
-  }
-  return(np)
-}
-
 cl <- parallel::makeCluster(6)
 parallel::clusterExport(cl,c('fn','L','genrep'))
 
 # set parameters of this specific simulation
 beta <- -0.3
-del_e <- 0.25
-n_locs <- 16
 
 for(i in 1:300){
   cat("\rITER: ",i)
   
-  dfp <- generate_intervention(dfp, del_e, beta, n_locs, FALSE)
+  dfp <- generate_intervention(dfp, del_e, beta, n_locs, misspec, FALSE)
   dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
   pt <- new_r_stat(dfanal$sim_y - mean(dfanal$sim_y),Li,dfanal$distance,all_dists,0.01,0.44,0,0,50,4,8,dfanal$t) 
   
