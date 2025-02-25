@@ -13,6 +13,7 @@ save_data <- TRUE # save newly created data
 
 # load required functions
 Rcpp::sourceCpp("src/perm_test.cpp")
+source("continuous_fn.R")
 
 #SIMULATION PARAMETERS
 
@@ -69,6 +70,7 @@ mod <- Model$new(
 )
 
 L <- t(chol(mod$Sigma())) # get cholesky decomposition of coviarance matrix
+Li <- solve(L)
 rm(mod)
 
 # plot the locations
@@ -93,8 +95,6 @@ dfp <- generate_intervention(dfp, 0.3, -0.3, 15, TRUE)
 # simulation parameter values
 beta <- 0
 
-Li <- solve(L)
-
 pvals <- c()
 pvals_ml <- c()
 for(zz in 1:1000){
@@ -117,9 +117,11 @@ for(zz in 1:1000){
   model2$update_parameters(cov.pars = cov_pars)
 
   fit2 <- tryCatch(model2$MCML(y = dfp$sim_y,
+                               reml = FALSE, # not compatible with HSGP approximation
                                lower.bound = c(-10,-10,0.01),
                                upper.bound = c(10,10,10)),
                    error = function(i)return(list()))
+  
   se <- tryCatch(sqrt(diag(solve(model2$information_matrix())))[2], error = function(e)return(NA))
   pvals_ml <- c(pvals_ml, 2*(1-pnorm(abs(fit2$coefficients$est[2]/se))))
   
@@ -169,6 +171,7 @@ for(i in 1:300){
   model2$update_parameters(cov.pars = cov_pars)
 
   fit2 <- tryCatch(model2$MCML(y = dfp$sim_y,
+                               reml = FALSE,
                                lower.bound = c(-10,-10,0.01),
                                upper.bound = c(10,10,1.0)),
                    error = function(i)return(list()))
@@ -194,33 +197,36 @@ for(i in 1:300){
     dfci$upper_ml[i] = fit2$coefficients$est[2] + qnorm(0.975)*se[2] 
     dfcid$lower_ml[i] = fit2$coefficients$est[3] - qnorm(0.975)*se[3] 
     dfcid$upper_ml[i] = fit2$coefficients$est[3] + qnorm(0.975)*se[3] 
+    
+    
+    dfci$pval[i] <- tryCatch(permute_p_value_b(pt,n_locs,0.3,200,d0), error = function(i)return(NA))
+    
+    fitn <- tryCatch(nls(sim_y ~ fn(distance, int, b, del),data = dfanal, 
+                         start = list(int = 0, b = -0.2, del = 0.3),
+                         lower = c(-10,-10,0.01), upper = c(10,10,1.0), algorithm = "port"), error = function(i)return(NA))
+    if(is(fitn,"nls")){
+      np <- fitn$m$getPars()
+      dfci$bp[i] <- np[2]
+      dfcid$dp[i] <- np[3]
+      
+      f1 <- model2b$fitted()
+      parallel::clusterExport(cl,c('dfanal','f1'))
+      res <- pbapply::pbreplicate(500, genrep(dfanal,f1,as.matrix(L)), cl = cl)
+      
+      dfci$lower[i] = np[2]-qnorm(0.975)*sd(res[2,],na.rm=TRUE)
+      dfci$upper[i] = np[2]+qnorm(0.975)*sd(res[2,],na.rm=TRUE)
+      dfcid$lower[i] = np[3]-qnorm(0.975)*sd(res[3,],na.rm=TRUE)
+      dfcid$upper[i] = np[3]+qnorm(0.975)*sd(res[3,],na.rm=TRUE)
+      
+      dfci$lower2[i] = fit2$coefficients$est[2]-qnorm(0.975)*sd(res[2,],na.rm=TRUE)
+      dfci$upper2[i] = fit2$coefficients$est[2]+qnorm(0.975)*sd(res[2,],na.rm=TRUE)
+      dfcid$lower2[i] = fit2$coefficients$est[3]-qnorm(0.975)*sd(res[3,],na.rm=TRUE)
+      dfcid$upper2[i] = fit2$coefficients$est[3]+qnorm(0.975)*sd(res[3,],na.rm=TRUE)
+      
+    }
+    
   }
   
-  dfci$pval[i] <- tryCatch(permute_p_value_b(pt,n_locs,0.3,200,d0), error = function(i)return(NA))
-  
-  fitn <- tryCatch(nls(sim_y ~ fn(distance, int, b, del),data = dfanal, 
-                       start = list(int = 0, b = -0.2, del = 0.3),
-                       lower = c(-10,-10,0.01), upper = c(10,10,1.0), algorithm = "port"), error = function(i)return(NA))
-  if(is(fitn,"nls")){
-    np <- fitn$m$getPars()
-    dfci$bp[i] <- np[2]
-    dfcid$dp[i] <- np[3]
-    
-    f1 <- model2b$fitted()
-    parallel::clusterExport(cl,c('dfanal','f1'))
-    res <- pbapply::pbreplicate(500, genrep(dfanal,f1,as.matrix(L)), cl = cl)
-    
-    dfci$lower[i] = np[2]-qnorm(0.975)*sd(res[2,],na.rm=TRUE)
-    dfci$upper[i] = np[2]+qnorm(0.975)*sd(res[2,],na.rm=TRUE)
-    dfcid$lower[i] = np[3]-qnorm(0.975)*sd(res[3,],na.rm=TRUE)
-    dfcid$upper[i] = np[3]+qnorm(0.975)*sd(res[3,],na.rm=TRUE)
-    
-    dfci$lower2[i] = fit2$coefficients$est[2]-qnorm(0.975)*sd(res[2,],na.rm=TRUE)
-    dfci$upper2[i] = fit2$coefficients$est[2]+qnorm(0.975)*sd(res[2,],na.rm=TRUE)
-    dfcid$lower2[i] = fit2$coefficients$est[3]-qnorm(0.975)*sd(res[3,],na.rm=TRUE)
-    dfcid$upper2[i] = fit2$coefficients$est[3]+qnorm(0.975)*sd(res[3,],na.rm=TRUE)
-    
-  }
   
   # rm(pt, model2, model2b)
   

@@ -11,14 +11,14 @@ source("discrete_fn.R")
 
 # flags for data
 use_data <- TRUE # use the simulated saved data
-save_data <- FALSE # save newly created data
+save_data <- TRUE # save newly created data
 
 #SIMULATION PARAMETERS
 beta <- -0.3 # max absolute intervention effect
-del_e <- 0.2
+del_e <- max_dist <- 0.2
 del_i <- 0.1 # ignore if using one-way model
-n_locs <- 12 # number of intervention sites
-radius <- 0.3 # radius of intervention areas
+n_locs <- 8 # number of intervention sites
+radius <- 0.2 # radius of intervention areas
 n_seed <- 10 # number of seed locations for observations
 n_child <- 150 # number of children per seed
 cov_pars <- c(0.25,0.5) # G.P. variance, length scale
@@ -98,10 +98,10 @@ if(use_data){
   dfp$d1[dfp$distance_potential >= -0.2 & dfp$distance_potential < -0.1] <- 1
   dfp$d2 <- 0
   dfp$d2[dfp$distance_potential >= -0.1 & dfp$distance_potential < 0.0] <- 1
-  # dfp$d3 <- 0
-  # dfp$d3[dfp$distance_potential >= 0.0 & dfp$distance_potential < 0.1] <- 1
-  # dfp$d4 <- 0
-  # dfp$d4[dfp$distance_potential >= 0.1 & dfp$distance_potential < 0.2] <- 1
+  dfp$d3 <- 0
+  dfp$d3[dfp$distance_potential >= 0.0 & dfp$distance_potential < 0.1] <- 1
+  dfp$d4 <- 0
+  dfp$d4[dfp$distance_potential >= 0.1 & dfp$distance_potential < 0.2] <- 1
   
   
   if(save_data){
@@ -129,7 +129,7 @@ if(adjust){
     family = gaussian()
   )
   
-  form <- ifelse(oneway,"~ twoway1(distance,8,4,50) + d2","~ twoway2(distance,8,4,50) + d2")
+  form <- ifelse(oneway,"~ b_eff * ((1 - (sign0(distance)*(-0.02)*(log(exp((-50)*sign0(distance)*((distance)/(del_e))) + exp((-25)*(1+sign0(distance))))))^(4))^(8)) + d2","~ twoway2(distance,8,4,50) + d2")
   form2 <- "sim_y ~ fn + d2"
 } else {
   model2b <- Model$new(
@@ -140,18 +140,18 @@ if(adjust){
     family = gaussian()
   )
   
-  form <- ifelse(oneway,"~ twoway1(distance,8,4,50)","~ twoway2(distance,8,4,50)")
+  form <- ifelse(oneway,"~ b_eff * ((1 - (sign0(distance)*(-0.02)*(log(exp((-50)*sign0(distance)*((distance)/(del_e))) + exp((-25)*(1+sign0(distance))))))^(4))^(8))","~ twoway2(distance,8,4,50)")
   form2 <- "sim_y ~ fn"
 }
 
 # this uses the full exponential GP model, so is a little slow, but only needs to be run once
 S <- model2b$Sigma()
-L <- t(chol(model2b$covariance$D))
+L <- t(chol(S))
 Li <- solve(L)
 rm(model2b)
 
 #test
-dfp <- generate_intervention(dfp, del_e, ifelse(oneway,0,del_i), beta, n_locs, TRUE)
+dfp <- generate_intervention(dfp, del_e, ifelse(oneway,0,del_i), beta, n_locs, dfi, TRUE)
 dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
 
 #####################################################
@@ -164,7 +164,7 @@ pvals_ml <- c()
 
 for(zz in 1:1000){
   cat("\nITER: ",zz,"\n")
-  dfp <- generate_intervention(dfp, del_e, del_i, beta, n_locs, FALSE)
+  dfp <- generate_intervention(dfp, del_e, del_i, beta, n_locs, dfi, FALSE)
   dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
   pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),solve(L),dfanal$distance,dists_i,c(0.01),c(0.4),ifelse(oneway,0.0,-0.2),c(0.0),50,4,8,dfanal$t)
   
@@ -202,6 +202,7 @@ for(zz in 1:1000){
   }
 
   fit2 <- tryCatch(model2$MCML(y = dfp$sim_y,
+                               reml = FALSE, # not compatible with HSGP approximation
                                lower.bound = lbound,
                                upper.bound = ubound),
                    error = function(i)return(list()))
@@ -209,7 +210,7 @@ for(zz in 1:1000){
   model2b <-  Model$new(
     as.formula(paste0(form," + (1|fexp(X,Y))")),
     data=dfanal,
-    covariance = model2$covariance$parameters, #model2$covariance$parameters
+    covariance = model2$covariance$parameters, 
     mean = model2$mean$parameters,
     family = gaussian()
   )
@@ -234,10 +235,10 @@ mean(pvals < 0.05)
 #  CONFIDENCE INTERVALS
 ##############################################
 
-dfci <- data.frame(iter = 1:1000, lower = NA, upper = NA, lower_ml = NA, upper_ml = NA, b= NA, bp = NA, pval = NA)
-dfcid <- data.frame(iter = 1:1000, lower_e = NA, upper_e = NA, lower_ml_e = NA, upper_ml_e = NA, lower_i = NA, upper_i = NA, lower_ml_i = NA, upper_ml_i = NA, d_e = NA, dp_e =NA, d_i = NA, dp_i =NA)
+dfci <- data.frame(iter = 1:1000, lower = NA, upper = NA, lower2 = NA, upper2 = NA, lower_ml = NA, upper_ml = NA, b= NA, bp = NA, pval = NA)
+dfcid <- data.frame(iter = 1:1000, lower_e = NA, upper_e = NA, lower_e2 = NA, upper_e2 = NA, lower_ml_e = NA, upper_ml_e = NA, lower_i = NA, upper_i = NA, lower_i2 = NA, upper_i2 = NA, lower_ml_i = NA, upper_ml_i = NA, d_e = NA, dp_e =NA, d_i = NA, dp_i =NA)
 
-cl <- parallel::makeCluster(8)
+cl <- parallel::makeCluster(6)
 parallel::clusterExport(cl,c('fn2','L','genrep'))
 
 # reset beta
@@ -246,20 +247,20 @@ beta <- -0.3
 
 for(i in 1:500){
   cat("\nITER: ",i,"\n")
-  dfp <- generate_intervention(dfp, del_e, ifelse(oneway,0,del_i), beta, n_locs, FALSE)
+  dfp <- generate_intervention(dfp, del_e, ifelse(oneway,0,del_i), beta, n_locs, dfi, i%%10 == 0)
   dfanal <- as.data.frame(dfp)[,-which(colnames(dfp)=="dp")]
   
   pt <- new_r_stat(dfanal$sim_y-mean(dfanal$sim_y),as.matrix(Li),dfanal$distance,dists_i,
                    c(0.01),c(0.4),ifelse(oneway,0.0,-2*del_i),c(0.0),50,4,8,dfanal$t)
   
   #starting values
-  mean_pars <- c(0.01,-0.1, 0.10)
+  mean_pars <- c(0.01,-0.3, 0.10)
   if(!oneway) mean_pars <- c(mean_pars, c(0.10))
   if(adjust) mean_pars <- c(mean_pars,rep(0.05,1))
   
   # # maximum likelihood model  
   model2 <- Model$new(
-    as.formula(paste0(form," + (1|hsgp_fexp(X,Y))")),
+    as.formula(paste0(form, "+ (1|hsgp_fexp(X,Y))")),
     data=dfanal,
     covariance = cov_pars,
     mean = mean_pars,
@@ -273,7 +274,17 @@ for(i in 1:500){
   #   mean = c(0.01,0.1,log(0.1),log(0.1),0.0),
   #   family = gaussian()
   # )
-  model2$mcmc_options$samps <- 200
+  
+  # model2 <- Model$new(
+  #   ~ b_eff * ((1 - (sign0(distance)*(-0.02)*(log(exp((-50)*sign0(distance)*((distance)/(del_e))) + exp((-25)*(1+sign0(distance))))))^(4))^(8)) + (1|hsgp_fexp(X,Y)),
+  #   data=dfanal,
+  #   covariance = cov_pars,
+  #   mean = c(0.01,-0.1,0.1),
+  #   family = gaussian()
+  # )
+  
+  # model2$mcmc_options$samps <- 200
+  
   model2$covariance$hsgp(m = c(10,10), L = c(1.05,1.05))
   model2$update_parameters(cov.pars = cov_pars)
 
@@ -293,8 +304,8 @@ for(i in 1:500){
   }
 
   fit2 <- tryCatch(model2$MCML(y = dfp$sim_y,
-                               method = "mcem",
                                reml = FALSE,
+                               max.iter = 10,
                                lower.bound = lbound,
                                upper.bound = ubound),
                    error = function(i)return(list()))
@@ -308,7 +319,6 @@ for(i in 1:500){
       di0 <- fit2$coefficients$est[3]
       de0 <- fit2$coefficients$est[4]
     }
-    
 
     model2b <- Model$new(
       as.formula(paste0(form," + (1|fexp(X,Y))")),
@@ -361,16 +371,23 @@ for(i in 1:500){
       
       dfci$lower[i] = fit2$coefficients$est[2] - qnorm(0.975)*sd(res[2,],na.rm=TRUE)
       dfci$upper[i] = fit2$coefficients$est[2] + qnorm(0.975)*sd(res[2,],na.rm=TRUE)
+      dfci$lower2[i] = np[2] - qnorm(0.975)*sd(res[2,],na.rm=TRUE)
+      dfci$upper2[i] = np[2] + qnorm(0.975)*sd(res[2,],na.rm=TRUE)
       if(!oneway){
         dfcid$lower_i[i] = fit2$coefficients$est[3] - qnorm(0.975)*sd(res[4,],na.rm=TRUE)
         dfcid$upper_i[i] = fit2$coefficients$est[3] + qnorm(0.975)*sd(res[4,],na.rm=TRUE)
         dfcid$lower_e[i] = fit2$coefficients$est[4] - qnorm(0.975)*sd(res[3,],na.rm=TRUE)
         dfcid$upper_e[i] = fit2$coefficients$est[4] + qnorm(0.975)*sd(res[3,],na.rm=TRUE)
+        
+        dfcid$lower_i2[i] = np[3] - qnorm(0.975)*sd(res[4,],na.rm=TRUE)
+        dfcid$upper_i2[i] = np[3] + qnorm(0.975)*sd(res[4,],na.rm=TRUE)
+        dfcid$lower_e2[i] = np[4] - qnorm(0.975)*sd(res[3,],na.rm=TRUE)
+        dfcid$upper_e2[i] = np[4] + qnorm(0.975)*sd(res[3,],na.rm=TRUE)
       } else {
         dfcid$lower_e[i] = fit2$coefficients$est[3] - qnorm(0.975)*sd(res[3,],na.rm=TRUE)
         dfcid$upper_e[i] = fit2$coefficients$est[3] + qnorm(0.975)*sd(res[3,],na.rm=TRUE)
-        dfcid$lower_i[i] = np[3] - qnorm(0.975)*sd(res[3,],na.rm=TRUE)
-        dfcid$upper_i[i] = np[3] + qnorm(0.975)*sd(res[3,],na.rm=TRUE)
+        dfcid$lower_e2[i] = np[3] - qnorm(0.975)*sd(res[3,],na.rm=TRUE)
+        dfcid$upper_e2[i] = np[3] + qnorm(0.975)*sd(res[3,],na.rm=TRUE)
       }
       
     }
@@ -379,6 +396,7 @@ for(i in 1:500){
   dfci$b[i] <- b0
   dfcid$d_i[i] <- di0
   dfcid$d_e[i] <- de0
+  
   if(oneway){
     dfci$pval[i] <- tryCatch(permute_p_value_b(pt,n_locs,0.3,200,de0), error = function(i)return(NA))
   } else {
@@ -387,18 +405,22 @@ for(i in 1:500){
   
   #rm(pt)
   if(save_data & i %% 10 == 0){
-    saveRDS(dfci,paste0("/dfci102_b",gsub("\\.|-","",as.character(beta)),ifelse(adjust,"adj",""),"_dis.RDS"))
-    saveRDS(dfcid,paste0("/dfcid102_b",gsub("\\.|-","",as.character(beta)),ifelse(adjust,"adj",""),"_dis.RDS"))
+    saveRDS(dfci,paste0("dfci102_b",gsub("\\.|-","",as.character(beta)),ifelse(adjust,"adj",""),"_dis.RDS"))
+    saveRDS(dfcid,paste0("dfcid102_b",gsub("\\.|-","",as.character(beta)),ifelse(adjust,"adj",""),"_dis.RDS"))
   }
 }
 
 ## SUMMARISE RESULTS
 mean(dfcid$lower_ml_e < del_e & dfcid$upper_ml_e > del_e, na.rm=TRUE)
 mean(dfcid$lower_ml_i < del_i & dfcid$upper_ml_i > del_i, na.rm=TRUE)
+mean(dfci$lower_ml < beta & dfci$upper_ml > beta, na.rm=TRUE)
+mean(dfci$lower < beta & dfci$upper > beta, na.rm=TRUE)
 
 mean(dfcid$lower_e < del_e & dfcid$upper_e > del_e, na.rm=TRUE)
 mean(dfcid$lower_i < del_e & dfcid$upper_i > del_e, na.rm=TRUE)
 
 # bias
-mean(d1$d_e - del_e, na.rm=TRUE)
-mean(d1$d_i - del_i, na.rm=TRUE)
+mean(dfcid$d_e - del_e, na.rm=TRUE)
+mean(dfcid$dp_e - del_e, na.rm=TRUE)
+
+mean(dfcid$d_i - del_i, na.rm=TRUE)

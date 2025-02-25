@@ -9,147 +9,158 @@ source(paste0(getwd(),"/solarized.R"))
 # load required functions
 Rcpp::sourceCpp("src/perm_test.cpp")
 
+USE_DATA <- TRUE # if false it will regenerate the data, otherwise it'll load it
 
-df <- read.csv(paste0(getwd(),"/data/binka_compounds.csv"))
-df <- df[df$expected > 0 ,]
-df$t <- 1
-dfp <- rts2::create_points(df,pos_vars = c('x','y'), t_var = "t")
-dfp$cl <- df$cluster
-dfp$arm <- df$arm
-dfp$deaths <- df$deaths
-dfp$expected <- df$expected
-dfp$nets <- df$nets
-cl <- unique(df$cluster)
-
-# create convex hull of cluster shapes
-
-for(i in cl){
-  if(!require(concaveman))install.packages("concaveman")
-  p1 <- concaveman::concaveman(dfp[dfp$cl==i,], concavity = 5) # change the concavity parameter for different levels of smoothing
-  p1$cl <- i
-  p1$arm <- df[df$cluster == i, 'arm'][1]
-  if(exists("dfpoly")){
-    dfpoly <- rbind(dfpoly, p1)
-  } else {
-    dfpoly <- p1
-  }
-}
-
-# plot the cluster areas
-
-ggplot()+
-  geom_sf(data=dfpoly[dfpoly$cl > 0,], aes(fill = factor(arm)),alpha = 0.2)+
-  scale_fill_manual(values = unname(solar_color[c(11,14)]),name = "Arm")+
-  theme_solar()
-
-# plot as spatial trial
-
-dfpoly_s <- st_sf(st_sfc(st_convex_hull(st_union(dfp))))
-dfpoly_t <- concaveman::concaveman(dfp, concavity = 20)
-
-p1 <- ggplot()+
-  geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
-  geom_sf(data = dfp, aes(color=factor(arm)), size=0.2, alpha=0.2)+
-  geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
-  scale_color_manual(values = unname(solar_color[c(11,14)]),name = "Arm")+
-  theme_solar()+
-  theme(axis.text = element_blank())
-
-p1b <- ggplot()+
-  geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
-  geom_sf(data = dfp[dfp$deaths>0,], aes(color=factor(deaths)), size=0.3, alpha=0.2)+
-  geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
-  scale_color_manual(values = unname(solar_color[c(11:14)]),name = "N deaths")+
-  theme_solar()+
-  theme(axis.text = element_blank())
-
-p1
-p1b
-
-## now process into a "spatial trial"
-
-## calculate distances
-
-dfp$distance <- NA
-dfp$id <- 1:nrow(dfp)
-int_area <- st_union(dfpoly[dfpoly$arm == "intervention",])
-int_area_boundary <- st_boundary(int_area)
-dfp_int <- st_filter(dfp,int_area)
-
-for(i in 1:nrow(dfp)){
-  if(i %in% dfp_int$id){
-    dfp$distance[i] <- -1 * st_distance(dfp[i,],int_area_boundary)
-  } else {
-    dfp$distance[i] <- min(st_distance(dfp[i,],int_area), 1000) # set to lower value for plotting
-  }
-  cat("\rRow: ",i," of ",nrow(dfp))
-}
-
-## distance to any boundary
-
-all_area <- st_union(dfpoly)
-all_area_boundary <- st_boundary(all_area)
-dfp$distance_all <- NA
-
-for(i in 1:nrow(dfp)){
-  dfp$distance_all[i] <- -1 * st_distance(dfp[i,],all_area_boundary) 
-  cat("\rRow: ",i," of ",nrow(dfp))
-}
-
-p2 <- ggplot()+
-  geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
-  geom_sf(data = dfp, aes(color=distance), size=0.2, alpha=0.2)+
-  geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
-  scico::scale_color_scico(palette="roma")+
-  theme_solar()+
-  theme(axis.text = element_blank())
-
-
-p1 + p2
-
-ggplot(data=dfp,aes(x=distance))+
-  geom_histogram()+
-  theme_solar()+
-  ggtitle("Distance from intervention area")
-
-# prepare final fitting dataset
-
-dfanal <- as.data.frame(dfp)
-dfanal <- cbind(dfanal, df[,c('x','y')])
-dfanal <- dfanal[,4:12]
-# rescale x and y to [-1,1] for approx GP 
-xrange <- range(dfanal$x)
-yrange <- range(dfanal$y)
-scale_f <- max(diff(xrange),diff(yrange))
-dfanal$x_re <- -1 + 2*(dfanal$x - min(dfanal$x))/scale_f  #-1 + (2 / diff(range(dfanal$x)))*(dfanal$x - min(dfanal$x))
-dfanal$y_re <- -1 + 2*(dfanal$y - min(dfanal$y))/scale_f # -1 + (2 / diff(range(dfanal$y)))*(dfanal$x - min(dfanal$y))
-dfanal <- dfanal[order(dfanal$y),]
-# jitter the duplicated location
-locs <- paste0(dfanal$x_re, dfanal$y_re)
-dfanal[duplicated(locs),'y_re'] <- dfanal[duplicated(locs),'y_re'] + 1e-6
-
-# create distance matrix for observations to potential intervention areas for permutation test
-dists_i <- matrix(NA,nrow=nrow(dfp),ncol=nrow(dfpoly))
-
-for(i in 1:nrow(dfp)){
-  for(j in 1:nrow(dfpoly)){
-    if(dfp$cl[i] == (j-1)){
-      dists_i[i,j] <- -1 * st_distance(dfp[i,],dfpoly[j,])
+if(!USE_DATA){
+  
+  df <- read.csv("data/binka_compounds.csv")
+  df <- df[df$expected > 0 ,]
+  df$t <- 1
+  dfp <- rts2::create_points(df,pos_vars = c('x','y'), t_var = "t")
+  dfp$cl <- df$cluster
+  dfp$arm <- df$arm
+  dfp$deaths <- df$deaths
+  dfp$expected <- df$expected
+  dfp$nets <- df$nets
+  cl <- unique(df$cluster)
+  
+  # create convex hull of cluster shapes
+  
+  for(i in cl){
+    if(!require(concaveman))install.packages("concaveman")
+    p1 <- concaveman::concaveman(dfp[dfp$cl==i,], concavity = 5) # change the concavity parameter for different levels of smoothing
+    p1$cl <- i
+    p1$arm <- df[df$cluster == i, 'arm'][1]
+    if(exists("dfpoly")){
+      dfpoly <- rbind(dfpoly, p1)
     } else {
-      dists_i[i,j] <- st_distance(dfp[i,],dfpoly[j,])
+      dfpoly <- p1
     }
   }
-  cat("\rRow: ",i, " of ",nrow(dfp))
+  
+  # plot the cluster areas
+  
+  ggplot()+
+    geom_sf(data=dfpoly[dfpoly$cl > 0,], aes(fill = factor(arm)),alpha = 0.2)+
+    scale_fill_manual(values = unname(solar_color[c(11,14)]),name = "Arm")+
+    theme_solar()
+  
+  # plot as spatial trial
+  
+  dfpoly_s <- st_sf(st_sfc(st_convex_hull(st_union(dfp))))
+  dfpoly_t <- concaveman::concaveman(dfp, concavity = 20)
+  
+  p1 <- ggplot()+
+    geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
+    geom_sf(data = dfp, aes(color=factor(arm)), size=0.2, alpha=0.2)+
+    geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
+    scale_color_manual(values = unname(solar_color[c(11,14)]),name = "Arm")+
+    theme_solar()+
+    theme(axis.text = element_blank())
+  
+  p1b <- ggplot()+
+    geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
+    geom_sf(data = dfp[dfp$deaths>0,], aes(color=factor(deaths)), size=0.3, alpha=0.2)+
+    geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
+    scale_color_manual(values = unname(solar_color[c(11:14)]),name = "N deaths")+
+    theme_solar()+
+    theme(axis.text = element_blank())
+  
+  p1
+  p1b
+  
+  ## now process into a "spatial trial"
+  
+  ## calculate distances
+  
+  dfp$distance <- NA
+  dfp$id <- 1:nrow(dfp)
+  int_area <- st_union(dfpoly[dfpoly$arm == "intervention",])
+  int_area_boundary <- st_boundary(int_area)
+  dfp_int <- st_filter(dfp,int_area)
+  
+  for(i in 1:nrow(dfp)){
+    if(i %in% dfp_int$id){
+      dfp$distance[i] <- -1 * st_distance(dfp[i,],int_area_boundary)
+    } else {
+      dfp$distance[i] <- min(st_distance(dfp[i,],int_area), 1000) # set to lower value for plotting
+    }
+    cat("\rRow: ",i," of ",nrow(dfp))
+  }
+  
+  ## distance to any boundary
+  
+  all_area <- st_union(dfpoly)
+  all_area_boundary <- st_boundary(all_area)
+  dfp$distance_all <- NA
+  
+  for(i in 1:nrow(dfp)){
+    dfp$distance_all[i] <- -1 * st_distance(dfp[i,],all_area_boundary) 
+    cat("\rRow: ",i," of ",nrow(dfp))
+  }
+  
+  p2 <- ggplot()+
+    geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
+    geom_sf(data = dfp, aes(color=distance), size=0.2, alpha=0.2)+
+    geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
+    scico::scale_color_scico(palette="roma")+
+    theme_solar()+
+    theme(axis.text = element_blank())
+  
+  
+  p1 + p2
+  
+  ggplot(data=dfp,aes(x=distance))+
+    geom_histogram()+
+    theme_solar()+
+    ggtitle("Distance from intervention area")
+  
+  # prepare final fitting dataset
+  
+  dfanal <- as.data.frame(dfp)
+  dfanal <- cbind(dfanal, df[,c('x','y')])
+  dfanal <- dfanal[,4:12]
+  # rescale x and y to [-1,1] for approx GP 
+  xrange <- range(dfanal$x)
+  yrange <- range(dfanal$y)
+  scale_f <- max(diff(xrange),diff(yrange))
+  dfanal$x_re <- -1 + 2*(dfanal$x - min(dfanal$x))/scale_f  #-1 + (2 / diff(range(dfanal$x)))*(dfanal$x - min(dfanal$x))
+  dfanal$y_re <- -1 + 2*(dfanal$y - min(dfanal$y))/scale_f # -1 + (2 / diff(range(dfanal$y)))*(dfanal$x - min(dfanal$y))
+  dfanal <- dfanal[order(dfanal$y),]
+  # jitter the duplicated location
+  locs <- paste0(dfanal$x_re, dfanal$y_re)
+  dfanal[duplicated(locs),'y_re'] <- dfanal[duplicated(locs),'y_re'] + 1e-6
+  
+  # create distance matrix for observations to potential intervention areas for permutation test
+  dists_i <- matrix(NA,nrow=nrow(dfp),ncol=nrow(dfpoly))
+  
+  for(i in 1:nrow(dfp)){
+    for(j in 1:nrow(dfpoly)){
+      if(dfp$cl[i] == (j-1)){
+        dists_i[i,j] <- -1 * st_distance(dfp[i,],dfpoly[j,])
+      } else {
+        dists_i[i,j] <- st_distance(dfp[i,],dfpoly[j,])
+      }
+    }
+    cat("\rRow: ",i, " of ",nrow(dfp))
+  }
+  
+  saveRDS(dfanal,"/data/binka_analysis_data.RDS")
+  saveRDS(dists_i,"/data/binka_dists.RDS")
+} else {
+  df <- read.csv("data/binka_compounds.csv")
+  dfanal <- readRDS("data/binka_analysis_data.RDS")
+  dists_i <- readRDS("data/binka_dists.RDS")
 }
 
-saveRDS(dfanal,paste0(getwd(),"/data/binka_analysis_data.RDS"))
-saveRDS(dists_i,paste0(getwd(),"/data/binka_dists.RDS"))
 
 
 
 # first model, no adjustment
 
 # null model for permutation test
+
+
 
 model_null <- Model$new(
   ~ (1|hsgp_fexp(x_re,y_re)),
@@ -164,15 +175,16 @@ model_null$covariance$hsgp(m = c(15,15), L = c(1.1,1.1))
 model_null$update_parameters(cov.pars = c(0.05,0.05))
 model_null$set_trace(1)
 
-fit_null <- model_null$MCML(y = dfanal$deaths)
+fit_null <- model_null$MCML(y = dfanal$deaths, reml = FALSE)
 
 S <- model_null$Sigma()
-E <- eigen(S)
-B <- E$vectors%*%diag(1/sqrt(E$values))
-rm(model_null,S,E)
+# E <- eigen(S)
+# B <- E$vectors%*%diag(1/sqrt(E$values))
+Li <- solve(t(chol(S)))
+rm(model_null,S)
 
-n_locs <- sum(dfpoly$arm=="intervention")
-pt <- new_r_stat(dfanal$sim_y-0.02165-dfanal$expected,t(B),dfanal$distance,dists_i,0.01,2,c(-1),c(0),50,4,8,1)
+n_locs <- length(unique(df[df$arm=="intervention","cluster"]))
+pt <- new_r_stat(dfanal$deaths-dfanal$expected,Li,dfanal$distance,dists_i,0.01,2,c(-1),c(0),50,4,8,1)
 permute_p_value_b(pt,n_locs,0,200,c(0.5,-0.02))
 
 # fit full model, no adjustment
@@ -201,6 +213,7 @@ fit0
 # get full covariance matrix
 
 # this is slow due to the size of the matrices, requires ~8 GB of memory
+
 model00 <- Model$new(
   ~ twoway2(distance,8,4,50) + (1|fexp(x_re,y_re)),
   data=dfanal,
@@ -252,6 +265,7 @@ fit0$coefficients$est[3] - sd(res[,4], na.rm=T)*qnorm(0.975)
 
 fit0$coefficients$est[4] + sd(res[,3], na.rm=T)*qnorm(0.975)
 fit0$coefficients$est[4] - sd(res[,3], na.rm=T)*qnorm(0.975)
+
 #extract the information matrix for later plotting
 
 M <- model$information_matrix()
@@ -267,8 +281,6 @@ for(i in 0:8){
 dfanal$distance_all_sq <- dfanal$distance_all^2
 
 # distance indicator model
-
-
 
 model2a <- Model$new(
   ~ twoway2(distance,8,4,50) + distance_all1 + distance_all2 + distance_all3 + distance_all4 + (1|hsgp_fexp(x_re,y_re)),
@@ -331,6 +343,7 @@ fit2a$coefficients$est[4] - sd(res[,3], na.rm=T)*qnorm(0.975)
 
 M2a <- model2a$information_matrix()
 rm(model2a)
+
 # degree-2 polynomial adjustment
 
 model2b <- Model$new(
@@ -393,6 +406,70 @@ fit2b$coefficients$est[4] - sd(res[3,], na.rm=T)*qnorm(0.975)
 
 M2b <- model2b$information_matrix()
 rm(model2b)
+
+## final model - one-way only with distance polynomial
+
+
+model2c <- Model$new(
+  ~ b_eff * ((1 - (sign0(distance)*(-0.02)*(log(exp((-50)*sign0(distance)*((distance)/(del_e))) + exp((-25)*(1+sign0(distance))))))^(4))^(8)) + distance_all + distance_all_sq + (1|hsgp_fexp(x_re,y_re)),
+  data=dfanal,
+  covariance = c(0.05, 0.16),
+  mean = c(0.3, -0.3, 0.98, 0.01, 0.01),
+  offset = dfanal$expected,
+  family = gaussian()
+)
+
+model2c$covariance$hsgp(m = c(15,15), L = c(1.1,1.1))
+model2c$set_trace(1)
+model2c$update_parameters(cov.pars = c(0.05, 0.16))
+
+fit2c <- model2b$MCML(y = dfanal$deaths,
+                      lower.bound = c(-10,-10,0,-10,-10), 
+                      upper.bound = c(10,10,2,10,10))
+
+fit2c
+
+
+fn2c <- function(x,d1,d2,int,b,del_e, del_i, b_d1, b_d2){
+  int + d1*b_d1 + d2*b_d2 + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
+}
+
+fitn <- nls(deaths ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, 0,b_1, b_2),data = dfanal, 
+            start = list(int = 0, b = -0.2, del_e = 0.2, b_1 = 0, b_2 = 0),
+            lower = c(-10,-10,0.01,rep(-10,2)), upper = c(10,10,1.0,rep(10,2)), algorithm = "port")
+
+f02c <- fitted(fitn)
+f2c <- model2b$fitted()
+
+genrep <- function(dfanal,f1,L){
+  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
+  fitn <- tryCatch(nls(ystar ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, 0,b_1, b_2),data = dfanal, 
+                       start = list(int = 0, b = -0.2, del_e = 0.2,  b_1 = 0, b_2 = 0),
+                       lower = c(-10,-10,0.01,rep(-10,2)), upper = c(10,10,1.0,rep(10,2)), algorithm = "port"), error= function(i)return(NA))
+  if(is(fitn,"nls")){
+    np <- fitn$m$getPars()
+  } else {
+    np <- rep(NA, 6)
+  }
+  return(np)
+}
+
+genrep(dfanal, f2c, L)
+
+res <- pbapply::pbreplicate(100, genrep(dfanal,f2c, L))
+# res <- Reduce(rbind, res)
+
+fit2c$coefficients$est[2] + sd(res[2,], na.rm=T)*qnorm(0.975)
+fit2c$coefficients$est[2] - sd(res[2,], na.rm=T)*qnorm(0.975)
+
+fit2c$coefficients$est[3] + sd(res[4,], na.rm=T)*qnorm(0.975)
+fit2c$coefficients$est[3] - sd(res[4,], na.rm=T)*qnorm(0.975)
+
+fit2c$coefficients$est[4] + sd(res[3,], na.rm=T)*qnorm(0.975)
+fit2c$coefficients$est[4] - sd(res[3,], na.rm=T)*qnorm(0.975)
+
+M2c <- model2c$information_matrix()
+rm(model2c)
 
 ### plot the function
 

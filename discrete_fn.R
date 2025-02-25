@@ -1,6 +1,6 @@
 ### FUNCTIONS - DISCRETE SIMULATION
 
-generate_intervention <- function(data, del_e, del_i, beta, n_locs, plot = TRUE){
+generate_intervention <- function(data, del_e, del_i, beta, n_locs, dfi, plot = TRUE){
   
   # sample locations  
   idx <- sort(sample(1:nrow(dfi),n_locs))
