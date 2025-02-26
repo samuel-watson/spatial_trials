@@ -1,11 +1,11 @@
 ### FUNCTIONS - DISCRETE SIMULATION
 
-generate_intervention <- function(data, del_e, del_i, beta, n_locs, dfi, plot = TRUE){
+generate_intervention <- function(data, del_e, del_i, beta, n_locs, dfi, misspec, plot = TRUE){
   
   # sample locations  
   idx <- sort(sample(1:nrow(dfi),n_locs))
   data$distance <- apply(dists_i[,idx],1,min)
-  data$fn <- fun(data$distance,50,4,8,c(del_e,-del_i),1,data$t)
+  data$fn <- fun(data$distance,50,4,8,c(del_e,-del_i),1,data$t, misspec)
   
   # generate intervention effect
   data$y_true <- data$fn * beta

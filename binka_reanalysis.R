@@ -4,163 +4,33 @@ require(glmmrBase)
 require(ggplot2)
 require(sf)
 require(patchwork)
-source(paste0(getwd(),"/solarized.R"))
+source("src/solarized.R")
 
 # load required functions
 Rcpp::sourceCpp("src/perm_test.cpp")
+source("src/reanalysis_fn.R")
 
-USE_DATA <- TRUE # if false it will regenerate the data, otherwise it'll load it
+# if USE_DATA is false it will regenerate/process the data (which can be slow), otherwise it'll load it
+# note, to generate Figure S4 in the Supplementary Information, USE_DATA must be FALSE
+# to generate the figure separately see the file "src/process_binka_data.R"
+USE_DATA <- TRUE 
 
-if(!USE_DATA){
-  
-  df <- read.csv("data/binka_compounds.csv")
-  df <- df[df$expected > 0 ,]
-  df$t <- 1
-  dfp <- rts2::create_points(df,pos_vars = c('x','y'), t_var = "t")
-  dfp$cl <- df$cluster
-  dfp$arm <- df$arm
-  dfp$deaths <- df$deaths
-  dfp$expected <- df$expected
-  dfp$nets <- df$nets
-  cl <- unique(df$cluster)
-  
-  # create convex hull of cluster shapes
-  
-  for(i in cl){
-    if(!require(concaveman))install.packages("concaveman")
-    p1 <- concaveman::concaveman(dfp[dfp$cl==i,], concavity = 5) # change the concavity parameter for different levels of smoothing
-    p1$cl <- i
-    p1$arm <- df[df$cluster == i, 'arm'][1]
-    if(exists("dfpoly")){
-      dfpoly <- rbind(dfpoly, p1)
-    } else {
-      dfpoly <- p1
-    }
-  }
-  
-  # plot the cluster areas
-  
-  ggplot()+
-    geom_sf(data=dfpoly[dfpoly$cl > 0,], aes(fill = factor(arm)),alpha = 0.2)+
-    scale_fill_manual(values = unname(solar_color[c(11,14)]),name = "Arm")+
-    theme_solar()
-  
-  # plot as spatial trial
-  
-  dfpoly_s <- st_sf(st_sfc(st_convex_hull(st_union(dfp))))
-  dfpoly_t <- concaveman::concaveman(dfp, concavity = 20)
-  
-  p1 <- ggplot()+
-    geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
-    geom_sf(data = dfp, aes(color=factor(arm)), size=0.2, alpha=0.2)+
-    geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
-    scale_color_manual(values = unname(solar_color[c(11,14)]),name = "Arm")+
-    theme_solar()+
-    theme(axis.text = element_blank())
-  
-  p1b <- ggplot()+
-    geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
-    geom_sf(data = dfp[dfp$deaths>0,], aes(color=factor(deaths)), size=0.3, alpha=0.2)+
-    geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
-    scale_color_manual(values = unname(solar_color[c(11:14)]),name = "N deaths")+
-    theme_solar()+
-    theme(axis.text = element_blank())
-  
-  p1
-  p1b
-  
-  ## now process into a "spatial trial"
-  
-  ## calculate distances
-  
-  dfp$distance <- NA
-  dfp$id <- 1:nrow(dfp)
-  int_area <- st_union(dfpoly[dfpoly$arm == "intervention",])
-  int_area_boundary <- st_boundary(int_area)
-  dfp_int <- st_filter(dfp,int_area)
-  
-  for(i in 1:nrow(dfp)){
-    if(i %in% dfp_int$id){
-      dfp$distance[i] <- -1 * st_distance(dfp[i,],int_area_boundary)
-    } else {
-      dfp$distance[i] <- min(st_distance(dfp[i,],int_area), 1000) # set to lower value for plotting
-    }
-    cat("\rRow: ",i," of ",nrow(dfp))
-  }
-  
-  ## distance to any boundary
-  
-  all_area <- st_union(dfpoly)
-  all_area_boundary <- st_boundary(all_area)
-  dfp$distance_all <- NA
-  
-  for(i in 1:nrow(dfp)){
-    dfp$distance_all[i] <- -1 * st_distance(dfp[i,],all_area_boundary) 
-    cat("\rRow: ",i," of ",nrow(dfp))
-  }
-  
-  p2 <- ggplot()+
-    geom_sf(data=dfpoly_t, alpha = 0.4, color = NA)+
-    geom_sf(data = dfp, aes(color=distance), size=0.2, alpha=0.2)+
-    geom_sf(data=dfpoly[dfpoly$arm == "intervention",],lty=1,alpha=0.2)+
-    scico::scale_color_scico(palette="roma")+
-    theme_solar()+
-    theme(axis.text = element_blank())
-  
-  
-  p1 + p2
-  
-  ggplot(data=dfp,aes(x=distance))+
-    geom_histogram()+
-    theme_solar()+
-    ggtitle("Distance from intervention area")
-  
-  # prepare final fitting dataset
-  
-  dfanal <- as.data.frame(dfp)
-  dfanal <- cbind(dfanal, df[,c('x','y')])
-  dfanal <- dfanal[,4:12]
-  # rescale x and y to [-1,1] for approx GP 
-  xrange <- range(dfanal$x)
-  yrange <- range(dfanal$y)
-  scale_f <- max(diff(xrange),diff(yrange))
-  dfanal$x_re <- -1 + 2*(dfanal$x - min(dfanal$x))/scale_f  #-1 + (2 / diff(range(dfanal$x)))*(dfanal$x - min(dfanal$x))
-  dfanal$y_re <- -1 + 2*(dfanal$y - min(dfanal$y))/scale_f # -1 + (2 / diff(range(dfanal$y)))*(dfanal$x - min(dfanal$y))
-  dfanal <- dfanal[order(dfanal$y),]
-  # jitter the duplicated location
-  locs <- paste0(dfanal$x_re, dfanal$y_re)
-  dfanal[duplicated(locs),'y_re'] <- dfanal[duplicated(locs),'y_re'] + 1e-6
-  
-  # create distance matrix for observations to potential intervention areas for permutation test
-  dists_i <- matrix(NA,nrow=nrow(dfp),ncol=nrow(dfpoly))
-  
-  for(i in 1:nrow(dfp)){
-    for(j in 1:nrow(dfpoly)){
-      if(dfp$cl[i] == (j-1)){
-        dists_i[i,j] <- -1 * st_distance(dfp[i,],dfpoly[j,])
-      } else {
-        dists_i[i,j] <- st_distance(dfp[i,],dfpoly[j,])
-      }
-    }
-    cat("\rRow: ",i, " of ",nrow(dfp))
-  }
-  
-  saveRDS(dfanal,"/data/binka_analysis_data.RDS")
-  saveRDS(dists_i,"/data/binka_dists.RDS")
-} else {
-  df <- read.csv("data/binka_compounds.csv")
-  dfanal <- readRDS("data/binka_analysis_data.RDS")
-  dists_i <- readRDS("data/binka_dists.RDS")
-}
+source("src/process_binka_data.R")
 
+## standard cluster trial analysis
 
+dfanal$treated <- (dfanal$arm == "intervention")*1
+model_std <- Model$new(
+  deaths ~ treated + (1|gr(cl)),
+  data=dfanal,
+  offset = dfanal$expected,
+  family = gaussian()
+)
 
+model_std$LA()
 
 # first model, no adjustment
-
 # null model for permutation test
-
-
 
 model_null <- Model$new(
   ~ (1|hsgp_fexp(x_re,y_re)),
@@ -178,8 +48,6 @@ model_null$set_trace(1)
 fit_null <- model_null$MCML(y = dfanal$deaths, reml = FALSE)
 
 S <- model_null$Sigma()
-# E <- eigen(S)
-# B <- E$vectors%*%diag(1/sqrt(E$values))
 Li <- solve(t(chol(S)))
 rm(model_null,S)
 
@@ -200,18 +68,16 @@ model <- Model$new(
 
 model$covariance$hsgp(m = c(15,15), L = c(1.1,1.1))
 model$update_parameters(cov.pars = c(0.05,0.05))
-model$set_trace(1)
 
 fit0 <- model$MCML(y = dfanal$deaths, 
+                   reml = FALSE,
                   lower.bound = c(-10,-10,0,0), 
                   upper.bound = c(10,10,2,2))
 
 fit0
 
 # bootstrapped confidence intervals
-
 # get full covariance matrix
-
 # this is slow due to the size of the matrices, requires ~8 GB of memory
 
 model00 <- Model$new(
@@ -229,32 +95,15 @@ rm(model00)
 
 # check NLS
 
-fn0 <- function(x,int,b,del_e, del_i){
-  int + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
-}
-
 fitn <- nls(deaths ~ fn0(distance, int,b, del_e, del_i),data = dfanal, 
     start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1),
     lower = c(-10,-10,0.01,0.0), upper = c(10,10,1.0,0.5), algorithm = "port")
 
 f01 <- fitted(fitn)
 
-genrep <- function(dfanal,f1,L){
-  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
-  fitn <- tryCatch(nls(ystar ~ fn0(distance, int,b, del_e, del_i),data = dfanal, 
-                       start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1),
-                       lower = c(-10,-10,0.01,0.0), upper = c(10,10,3.0,1.5), algorithm = "port"), error= function(i)return(NA))
-  if(is(fitn,"nls")){
-    np <- fitn$m$getPars()
-  } else {
-    np <- rep(NA, 3)
-  }
-  return(np)
-}
+genrep0(dfanal, f01, L)
 
-genrep(dfanal, f01, L)
-
-res <- pbapply::pbreplicate(1000, genrep(dfanal,f01, L))
+res <- pbapply::pbreplicate(1000, genrep0(dfanal,f01, L))
 res <- Reduce(rbind, res)
 
 fit0$coefficients$est[2] + sd(res[,2], na.rm=T)*qnorm(0.975)
@@ -280,7 +129,7 @@ for(i in 0:8){
 }
 dfanal$distance_all_sq <- dfanal$distance_all^2
 
-# distance indicator model
+# distance indicator model - set easy starting values to make it a bit quicker!
 
 model2a <- Model$new(
   ~ twoway2(distance,8,4,50) + distance_all1 + distance_all2 + distance_all3 + distance_all4 + (1|hsgp_fexp(x_re,y_re)),
@@ -292,20 +141,16 @@ model2a <- Model$new(
 )
 
 model2a$covariance$hsgp(m = c(15,15), L = c(1.2,1.2))
-model2a$set_trace(1)
 model2a$update_parameters(cov.pars = c(0.05161, 0.15722))
 
 fit2a <- model2a$MCML(y = dfanal$deaths,
+                      reml = FALSE,
                       lower.bound = c(-10,-10,0,0,-10,-10,-10,-10), 
                       upper.bound = c(10,10,2,2,10,10,10,10))
 
 fit2a
 
 # check NLS
-
-fn2a <- function(x,d1,d2,d3,d4,int,b,del_e, del_i, b_d1, b_d2,b_d3,b_d4){
-  int + d1*b_d1 + d2*b_d2 + d3*b_d3 + d4*b_d4 + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
-}
 
 fitn <- nls(deaths ~ fn2a(distance,distance_all1,distance_all2,distance_all3,distance_all4, int,b, del_e, del_i,b_1, b_2,b_3,b_4),data = dfanal, 
             start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_1 = 0, b_2 = 0,b_3 = 0, b_4 = 0),
@@ -314,22 +159,9 @@ fitn <- nls(deaths ~ fn2a(distance,distance_all1,distance_all2,distance_all3,dis
 f02a <- fitted(fitn)
 f2a <- model2a$fitted()
 
-genrep <- function(dfanal,f1,L){
-  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
-  fitn <- tryCatch(nls(ystar ~ fn2a(distance,distance_all1,distance_all2,distance_all3,distance_all4, int,b, del_e, del_i,b_1, b_2,b_3,b_4),data = dfanal, 
-                       start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_1 = 0, b_2 = 0,b_3 = 0, b_4 = 0),
-                       lower = c(-10,-10,0.01,0.0,rep(-10,4)), upper = c(10,10,4.0,1.5,rep(10,4)), algorithm = "port"), error= function(i)return(NA))
-  if(is(fitn,"nls")){
-    np <- fitn$m$getPars()
-  } else {
-    np <- rep(NA, 8)
-  }
-  return(np)
-}
+genrep2a(dfanal, f2a, L)
 
-genrep(dfanal, f2a, L)
-
-res <- pbapply::pbreplicate(1000, genrep(dfanal,f2a, L))
+res <- pbapply::pbreplicate(1000, genrep2a(dfanal,f2a, L))
 res <- Reduce(rbind, res)
 
 fit2a$coefficients$est[2] + sd(res[,2], na.rm=T)*qnorm(0.975)
@@ -356,19 +188,14 @@ model2b <- Model$new(
 )
 
 model2b$covariance$hsgp(m = c(15,15), L = c(1.1,1.1))
-model2b$set_trace(1)
 model2b$update_parameters(cov.pars = c(0.05, 0.16))
 
 fit2b <- model2b$MCML(y = dfanal$deaths,
+                      reml = FALSE,
                       lower.bound = c(-10,-10,0,0,-10,-10), 
                       upper.bound = c(10,10,2,2,10,10))
 
 fit2b
-
-
-fn2b <- function(x,d1,d2,int,b,del_e, del_i, b_d1, b_d2){
-  int + d1*b_d1 + d2*b_d2 + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
-}
 
 fitn <- nls(deaths ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, del_i,b_1, b_2),data = dfanal, 
             start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_1 = 0, b_2 = 0),
@@ -377,22 +204,9 @@ fitn <- nls(deaths ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, de
 f02b <- fitted(fitn)
 f2b <- model2b$fitted()
 
-genrep <- function(dfanal,f1,L){
-  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
-  fitn <- tryCatch(nls(ystar ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, del_i,b_1, b_2),data = dfanal, 
-                       start = list(int = 0, b = -0.2, del_e = 0.2, del_i = 0.1, b_1 = 0, b_2 = 0),
-                       lower = c(-10,-10,0.01,0.0,rep(-10,2)), upper = c(10,10,1.0,0.5,rep(10,2)), algorithm = "port"), error= function(i)return(NA))
-  if(is(fitn,"nls")){
-    np <- fitn$m$getPars()
-  } else {
-    np <- rep(NA, 6)
-  }
-  return(np)
-}
+genrep2b(dfanal, f2b, L)
 
-genrep(dfanal, f2b, L)
-
-res <- pbapply::pbreplicate(100, genrep(dfanal,f2b, L))
+res <- pbapply::pbreplicate(100, genrep2b(dfanal,f2b, L))
 # res <- Reduce(rbind, res)
 
 fit2b$coefficients$est[2] + sd(res[2,], na.rm=T)*qnorm(0.975)
@@ -420,65 +234,40 @@ model2c <- Model$new(
 )
 
 model2c$covariance$hsgp(m = c(15,15), L = c(1.1,1.1))
-model2c$set_trace(1)
 model2c$update_parameters(cov.pars = c(0.05, 0.16))
 
-fit2c <- model2b$MCML(y = dfanal$deaths,
+fit2c <- model2c$MCML(y = dfanal$deaths,
+                      reml = FALSE,
                       lower.bound = c(-10,-10,0,-10,-10), 
                       upper.bound = c(10,10,2,10,10))
 
 fit2c
-
-
-fn2c <- function(x,d1,d2,int,b,del_e, del_i, b_d1, b_d2){
-  int + d1*b_d1 + d2*b_d2 + b*((1-((sign(x)/-50)*log(exp(sign(x)*-50*(x + del_i)/(del_e + del_i)) + exp(-50*(sign(x)+1)/2)))^4)^8) 
-}
 
 fitn <- nls(deaths ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, 0,b_1, b_2),data = dfanal, 
             start = list(int = 0, b = -0.2, del_e = 0.2, b_1 = 0, b_2 = 0),
             lower = c(-10,-10,0.01,rep(-10,2)), upper = c(10,10,1.0,rep(10,2)), algorithm = "port")
 
 f02c <- fitted(fitn)
-f2c <- model2b$fitted()
-
-genrep <- function(dfanal,f1,L){
-  dfanal$ystar <- f1 + L%*%(rnorm(length(f1))) 
-  fitn <- tryCatch(nls(ystar ~ fn2b(distance,distance_all,distance_all_sq,int,b, del_e, 0,b_1, b_2),data = dfanal, 
-                       start = list(int = 0, b = -0.2, del_e = 0.2,  b_1 = 0, b_2 = 0),
-                       lower = c(-10,-10,0.01,rep(-10,2)), upper = c(10,10,1.0,rep(10,2)), algorithm = "port"), error= function(i)return(NA))
-  if(is(fitn,"nls")){
-    np <- fitn$m$getPars()
-  } else {
-    np <- rep(NA, 6)
-  }
-  return(np)
-}
+f2c <- model2c$fitted()
 
 genrep(dfanal, f2c, L)
 
-res <- pbapply::pbreplicate(100, genrep(dfanal,f2c, L))
-# res <- Reduce(rbind, res)
+res <- pbapply::pbreplicate(200, genrep(dfanal,f2c, L))
+res <- Reduce(rbind, res)
 
-fit2c$coefficients$est[2] + sd(res[2,], na.rm=T)*qnorm(0.975)
-fit2c$coefficients$est[2] - sd(res[2,], na.rm=T)*qnorm(0.975)
+fit2c$coefficients$est[2] + sd(res[,2], na.rm=T)*qnorm(0.975)
+fit2c$coefficients$est[2] - sd(res[,2], na.rm=T)*qnorm(0.975)
 
-fit2c$coefficients$est[3] + sd(res[4,], na.rm=T)*qnorm(0.975)
-fit2c$coefficients$est[3] - sd(res[4,], na.rm=T)*qnorm(0.975)
-
-fit2c$coefficients$est[4] + sd(res[3,], na.rm=T)*qnorm(0.975)
-fit2c$coefficients$est[4] - sd(res[3,], na.rm=T)*qnorm(0.975)
+fit2c$coefficients$est[3] + sd(res[,3], na.rm=T)*qnorm(0.975)
+fit2c$coefficients$est[3] - sd(res[,3], na.rm=T)*qnorm(0.975)
 
 M2c <- model2c$information_matrix()
 rm(model2c)
 
 ### plot the function
 
-fn <- function(x,l,kappa,nu,del_e, del_i, b){
-  b*((1-((sign(x)/l)*log(exp(sign(x)*l*(x + del_i)/(del_e + del_i)) + exp(l*(sign(x)+1)/2)))^kappa)^nu) 
-}
-
-df1 <- data.frame(distance = rep(seq(-1,1.5,length.out=100),3),
-                  model = rep(1:3,each=100))
+df1 <- data.frame(distance = rep(seq(-1,1.5,length.out=100),4),
+                  model = rep(1:4,each=100))
 
 df1 <- df1[df1$distance!=0,]
 df1$expected <- 0
@@ -492,7 +281,8 @@ df1$distance_all <- 0
 #df1$y <- fn(df1$distance[1:100],-50,2.05801,16, 1.58349, 0.15759 ,-0.29911)
 df1$y <- c(fn(df1$distance[1:100],-50,4,8,fit0$coefficients$est[4], fit0$coefficients$est[3] ,fit0$coefficients$est[2]), 
   fn(df1$distance[1:100],-50,4,8, fit2a$coefficients$est[4] , fit2a$coefficients$est[3] ,fit2a$coefficients$est[2]) , 
- fn(df1$distance[1:100],-50,4,8, fit2b$coefficients$est[4], fit2b$coefficients$est[3] ,fit2b$coefficients$est[2])) 
+ fn(df1$distance[1:100],-50,4,8, fit2b$coefficients$est[4], fit2b$coefficients$est[3] ,fit2b$coefficients$est[2]),
+ fn(df1$distance[1:100],-50,4,8, fit2c$coefficients$est[3], 0 ,fit2c$coefficients$est[2])) 
 
 df1$cl <- sample(1:10,nrow(df1),replace=TRUE)
 df1$se <- NA
@@ -547,6 +337,23 @@ df1$lci[201:300] <- df1$y[201:300] - qnorm(0.975)*df1$se[201:300]
 df1$uci[201:300] <- df1$y[201:300] + qnorm(0.975)*df1$se[201:300]
 rm(modeld)
 
+# fit 2 c
+modeld <- Model$new(
+  ~ b_eff * ((1 - (sign0(distance)*(-0.02)*(log(exp((-50)*sign0(distance)*((distance)/(del_e))) + exp((-25)*(1+sign0(distance))))))^(4))^(8)) + distance_all + distance_all_sq + (1|gr(cl)),
+  data=df1[301:400,],
+  covariance = c( 0.05),
+  mean = fit2c$coefficients$est[1:5],
+  family = poisson()
+)
+
+X0 <- modeld$mean$X
+X0[,1] <- 0
+M2ci <- solve(M2c)
+df1$se[301:400] <- sqrt(diag(X0%*%M2ci%*%t(X0)))
+df1$lci[301:400] <- df1$y[301:400] - qnorm(0.975)*df1$se[301:400]
+df1$uci[301:400] <- df1$y[301:400] + qnorm(0.975)*df1$se[301:400]
+rm(modeld)
+
 p4 <- ggplot()+
   geom_hline(yintercept = 0,lty=2)+
   geom_vline(xintercept = 0,lty=2)+
@@ -555,7 +362,7 @@ p4 <- ggplot()+
   theme_solar()+
   scale_x_continuous(expand = c(0.01,0))+
   labs(x="Distance (km)", y = "Risk difference")+
-  scale_fill_manual(name = "Model", labels = c("No adjustment", "Indicators", "Polynomial"), values = unname(solar_color[c(11,14,16)]))+
-  scale_color_manual(name = "Model", labels = c("No adjustment", "Indicators", "Polynomial"), values = unname(solar_color[c(11,14,16)])); p4
+  scale_fill_manual(name = "Model", labels = c("No adjustment", "Indicators", "Polynomial", "One-way"), values = unname(solar_color[c(9,11,14,16)]))+
+  scale_color_manual(name = "Model", labels = c("No adjustment", "Indicators", "Polynomial", "One-way"), values = unname(solar_color[c(9,11,14,16)])); p4
 
-p4
+p4 # this is Figure 3 in the article

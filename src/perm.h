@@ -40,10 +40,20 @@ inline ArrayXd fn(const ArrayXd& dist,
   ArrayXd result(dist);
   if(!misspec){
     if(del.size()==1){
-      result *= -l/del[0];
-      result = result.exp() + exp(-1.0*l);
+      // result *= -l/del[0];
+      // result = result.exp() + exp(-1.0*l);
+      // result = result.log();
+      // result *= (-1.0/l);
+      // result = 1.0 - result.pow(kappa);
+      
+      ArrayXd signd(dist.size());
+      for(int i = 0; i < signd.size(); i++)signd(i) = dist(i) >= 0 ? 1.0 : -1.0;
+      result *= -l/(del[0]);
+      result *= signd;
+      result = result.exp() + (-0.5*l*(signd+1.0)).exp();
       result = result.log();
       result *= (-1.0/l);
+      result *= signd;
       result = 1.0 - result.pow(kappa);
     } else {
       ArrayXd signd(dist.size());
@@ -96,13 +106,29 @@ inline ArrayXd fn(const ArrayXd& dist,
   if(del.size() != nT && del.size() != 2*nT) throw std::runtime_error("nT != number of del_e parameters");
   if(!misspec){
     if(del.size()==nT){
-      for(int i = 0; i < dist.size(); i++){
-        result(i) *= -l/del[time(i)-1];
+      ArrayXd signd(dist.size());
+      for(int i = 0; i < signd.size(); i++){
+        signd(i) = dist(i) >= 0 ? 1.0 : -1.0;
+        result(i) *= -l/(del[time(i)-1]);
       }
-      result = result.exp() + exp(-1.0*l);
+      result *= signd;
+      result = result.exp() + (-0.5*l*(signd+1.0)).exp();
       result = result.log();
       result *= (-1.0/l);
+      result *= signd;
       result = 1.0 - result.pow(kappa);
+      
+      // if((dist < 0).any()){
+      //   
+      // } else {
+      //   for(int i = 0; i < dist.size(); i++){
+      //     result(i) *= -l/del[time(i)-1];
+      //   }
+      //   result = result.exp() + exp(-1.0*l);
+      //   result = result.log();
+      //   result *= (-1.0/l);
+      //   result = 1.0 - result.pow(kappa);
+      // }
     } else {
       ArrayXd signd(dist.size());
       for(int i = 0; i < signd.size(); i++){
@@ -425,7 +451,7 @@ public:
   std::vector<double> values(){
     std::vector<double> result(last_del);
     result.push_back(last_r);
-    if((dists < 0).any())for(int i = 0; i < last_del_i.size(); i++)result.push_back(last_del_i[i]);
+    if((dists < 0).any() && upper_bounds_i[0] - lower_bounds_i[0] > 0)for(int i = 0; i < last_del_i.size(); i++)result.push_back(last_del_i[i]);
     return result;
   }
   

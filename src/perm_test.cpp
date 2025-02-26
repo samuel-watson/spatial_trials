@@ -114,7 +114,7 @@ double permute_p_value_b(SEXP xp,
   std::vector<double> lower(ptr->lower_bounds_e);
   std::vector<double> upper(ptr->upper_bounds_e);
 
-  if((ptr->dists < 0).any()){
+  if(del.size() > 1 && (ptr->dists < 0).any()){
     for(int i = 0; i < ptr->lower_bounds_i.size(); i++){
       lower.push_back(ptr->lower_bounds_i[i]);
       upper.push_back(ptr->upper_bounds_i[i]);
@@ -125,6 +125,7 @@ double permute_p_value_b(SEXP xp,
   op.minimise();
   result = ptr->values();
   test_stat = abs(result[ptr->nT]);
+  //Rcpp::Rcout << "\nTest stat: " << test_stat;
   
   int exceeds = 0;
   ptr->use_alt(true);
@@ -133,6 +134,7 @@ double permute_p_value_b(SEXP xp,
     ptr->permute_dists(n,min_dist);
     op.minimise();
     result = ptr->values();
+    // Rcpp::Rcout << "\nPerm stat: " << abs(result[ptr->nT]) << "\n";
     if(abs(result[ptr->nT]) >= test_stat) exceeds++;
     Rcpp::Rcout << "\rIter: " << i+1 << " of " << n_iter;
   }

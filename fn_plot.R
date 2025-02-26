@@ -1,7 +1,9 @@
 # PLOTTING CONTINUOUS FUNCTIONS
 
+# This code generates Figure S2 (Supplementary Information)
+
 require(ggplot2)
-source(paste0(getwd(),"/solarized.R"))
+source("src/solarized.R")
 
 fn1 <- function(x,l,kappa,nu,del_e, del_i, b){
   b*((1-((sign(x)/l)*log(exp(sign(x)*l*(x - del_i)/(del_e - del_i)) + exp(l*(sign(x)+1)/2)))^kappa)^nu) 
