@@ -16,6 +16,10 @@ Rcpp. There are four key files at the top level of the repository:
 
 - _fn_plot.R_ This file will generate Figure S2 in the Supplementary Information, which shows the shape of different versions of the dose response function discussed
   in the article.
+  
+- _simulation html.Rmd_ Instead of printing results to the console, one can generate an html with tables 
+of the parameters and the results. To use this file, set the parameter values in either _continuous_simulation.R_ or _discrete_simulation.R_, and then in this markdown file, set the variable 
+"continuous" to either TRUE or FALSE, respectively, and run the file. 
 
 ## Generating a simulation
 The two simulation files contain a block to specify the desired simulation parameters:
@@ -41,3 +45,6 @@ print_fit_progress <- TRUE # if true it will print the intermediate model fittin
 These values should be set first, and then the whole script run to start the simulation. Some pre-generated observation locations and latent field are saved 
 in the repository and can be automatically loaded if required. Note that the simulation is long-running as model fitting is relatively slow. Code described in the files in the src/ 
 folder provides the specific estimators, which can be called independently.
+
+## Questions? Not working?
+Please feel free to contact me either by raising an issue on github here, or emailing s.i.watson "at" bham.ac.uk.

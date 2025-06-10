@@ -1,3 +1,15 @@
+if(exists("generate_markdown")){
+  sim_pars_df <- data.frame(
+    Parameter = c("Number of seeds","Number of children","Covariance parameters",
+                  "Misspecified model","Delta_E","Delta_I","Radius of intervention area","Number of sampled intervention locations",
+                  "Upper bound on Delta_E","Maximum effect size","Number of simulation iterations",
+                  "Number of permutation/bootstrap iterations","Adjusted analysis?","Oneway spillover model?",
+                  "Two-way simulation with one-way analysis?"),
+    Value = c(n_seed, n_child,  paste0(cov_pars,collapse = ","), misspec, del_e, del_i,radius, 
+              n_locs, max_del, beta, n_iter, n_perm, adjust, oneway, oneway*sim_two)
+  )
+  saveRDS(sim_pars_df, "/results/last_sim_pars.RDS")
+}
 
 # GENERATE BASE DATA INCL. SAMPLE POINTS AND LATENT SURFACE
 
@@ -387,41 +399,63 @@ if(beta == 0) {
   ## we may want to filter out sims where it hit the boundary
   # dfci <- dfci[abs(dfci$b) < 10, ]
   
-  cat("\nCoverage GLS beta:\n")
-  mean(dfci$lower_ml < beta & dfci$upper_ml > beta, na.rm=TRUE)
-  cat("\nCoverage boot CI - ML beta:\n")
-  mean(dfci$lower < beta & dfci$upper > beta, na.rm=TRUE)  # ML based bootstrap
-  cat("\nCoverage boot CI - NLS beta:\n")
-  mean(dfci$lower2 < beta & dfci$upper2 > beta, na.rm=TRUE) # NLS based bootstrap
+  if(exists("generate_markdown")){
+    cat("\nCoverage GLS beta:\n")
+    mean(dfci$lower_ml < beta & dfci$upper_ml > beta, na.rm=TRUE)
+    cat("\nCoverage boot CI - ML beta:\n")
+    mean(dfci$lower < beta & dfci$upper > beta, na.rm=TRUE)  # ML based bootstrap
+    cat("\nCoverage boot CI - NLS beta:\n")
+    mean(dfci$lower2 < beta & dfci$upper2 > beta, na.rm=TRUE) # NLS based bootstrap
+    
+    cat("\nCoverage GLS CI delta_E:\n")
+    mean(dfcid$lower_ml_e < del_e & dfcid$upper_ml_e > del_e, na.rm=TRUE)
+    cat("\nCoverage boot CI - ML delta_E:\n")
+    mean(dfcid$lower_e < del_e & dfcid$upper_e > del_e, na.rm=TRUE) # ML based bootstrap
+    cat("\nCoverage boot CI - NLS delta_E:\n")
+    mean(dfcid$lower_e2 < del_e & dfcid$upper_e2 > del_e, na.rm=TRUE) # NLS based bootstrap
+    cat("\nCoverage GLS CI delta_I:\n")
+    mean(dfcid$lower_ml_i < del_i & dfcid$upper_ml_i > del_i, na.rm=TRUE)
+    cat("\nCoverage boot CI - ML delta_I:\n")
+    mean(dfcid$lower_i < del_e & dfcid$upper_i > del_e, na.rm=TRUE) # ML based bootstrap
+    cat("\nCoverage boot CI - NLS delta_I:\n")
+    mean(dfcid$lower_i2 < del_e & dfcid$upper_i2 > del_e, na.rm=TRUE) # NLS based bootstrap
+    
+    # bias
+    cat("\nBias delta_E ML:\n")
+    mean(dfcid$d_e - del_e, na.rm=TRUE) # ML 
+    cat("\nBias delta_I ML:\n")
+    mean(dfcid$d_i - del_i, na.rm=TRUE) # ML
+    cat("\nBias delta_E NLS:\n")
+    mean(dfcid$dp_e - del_e, na.rm=TRUE) # NLS
+    cat("\nBias delta_I NLS:\n")
+    mean(dfcid$dp_i - del_i, na.rm=TRUE) # NLS
+    cat("\nBias beta ML:\n")
+    mean(dfci$b - beta, na.rm=TRUE) # ML
+    cat("\nBias beta NLS:\n")
+    mean(dfci$bp - beta, na.rm=TRUE) # NLS
+    
+    # pvals
+    cat("\nPower perm beta p:\n")
+    mean(dfci$pval < 0.05, na.rm=TRUE) # boot
+  } else {
+    sim_results <- data.frame(
+      Result = c("Coverage GLS beta:", "Coverage boot CI - ML beta:", "Coverage boot CI - NLS beta:",
+                 "Coverage GLS CI delta_E:", "Coverage boot CI - ML delta_E:", "Coverage boot CI - NLS delta_E:",
+                 "Coverage GLS CI delta_I:", "Coverage boot CI - ML delta_I:", "Coverage boot CI - NLS delta_I:",
+                 "Bias delta_E ML:","Bias delta_I ML:", "Bias delta_E NLS:", "Bias delta_I NLS:",
+                 "Bias beta ML:", "Bias beta NLS:", "Power perm beta p:"),
+      Value = c(mean(dfci$lower_ml < beta & dfci$upper_ml > beta, na.rm=TRUE), mean(dfci$lower < beta & dfci$upper > beta, na.rm=TRUE),
+                mean(dfci$lower2 < beta & dfci$upper2 > beta, na.rm=TRUE), mean(dfcid$lower_ml_e < del_e & dfcid$upper_ml_e > del_e, na.rm=TRUE),
+                mean(dfcid$lower_e < del_e & dfcid$upper_e > del_e, na.rm=TRUE), mean(dfcid$lower_e2 < del_e & dfcid$upper_e2 > del_e, na.rm=TRUE),
+                mean(dfcid$lower_ml_i < del_i & dfcid$upper_ml_i > del_i, na.rm=TRUE), mean(dfcid$lower_i < del_e & dfcid$upper_i > del_e, na.rm=TRUE) ,
+                mean(dfcid$lower_i2 < del_e & dfcid$upper_i2 > del_e, na.rm=TRUE) , mean(dfcid$d_e - del_e, na.rm=TRUE),
+                mean(dfcid$d_i - del_i, na.rm=TRUE), mean(dfcid$dp_e - del_e, na.rm=TRUE),mean(dfcid$dp_i - del_i, na.rm=TRUE),
+                mean(dfci$b - beta, na.rm=TRUE), mean(dfci$bp - beta, na.rm=TRUE) , mean(dfci$pval < 0.05, na.rm=TRUE) )
+    )
+    saveRDS(sim_results, "/results/last_sim_output.RDS")
+  }
   
-  cat("\nCoverage GLS CI delta_E:\n")
-  mean(dfcid$lower_ml_e < del_e & dfcid$upper_ml_e > del_e, na.rm=TRUE)
-  cat("\nCoverage boot CI - ML delta_E:\n")
-  mean(dfcid$lower_e < del_e & dfcid$upper_e > del_e, na.rm=TRUE) # ML based bootstrap
-  cat("\nCoverage boot CI - NLS delta_E:\n")
-  mean(dfcid$lower_e2 < del_e & dfcid$upper_e2 > del_e, na.rm=TRUE) # NLS based bootstrap
-  cat("\nCoverage GLS CI delta_I:\n")
-  mean(dfcid$lower_ml_i < del_i & dfcid$upper_ml_i > del_i, na.rm=TRUE)
-  cat("\nCoverage boot CI - ML delta_I:\n")
-  mean(dfcid$lower_i < del_e & dfcid$upper_i > del_e, na.rm=TRUE) # ML based bootstrap
-  cat("\nCoverage boot CI - NLS delta_I:\n")
-  mean(dfcid$lower_i2 < del_e & dfcid$upper_i2 > del_e, na.rm=TRUE) # NLS based bootstrap
   
-  # bias
-  cat("\nBias delta_E ML:\n")
-  mean(dfcid$d_e - del_e, na.rm=TRUE) # ML 
-  cat("\nBias delta_I ML:\n")
-  mean(dfcid$d_i - del_i, na.rm=TRUE) # ML
-  cat("\nBias delta_E NLS:\n")
-  mean(dfcid$dp_e - del_e, na.rm=TRUE) # NLS
-  cat("\nBias delta_I NLS:\n")
-  mean(dfcid$dp_i - del_i, na.rm=TRUE) # NLS
-  cat("\nBias beta ML:\n")
-  mean(dfci$b - beta, na.rm=TRUE) # ML
-  cat("\nBias beta NLS:\n")
-  mean(dfci$bp - beta, na.rm=TRUE) # NLS
   
-  # pvals
-  cat("\nPower perm beta p:\n")
-  mean(dfci$pval < 0.05, na.rm=TRUE) # boot
+  
 }

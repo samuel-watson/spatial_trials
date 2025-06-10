@@ -1,0 +1,34 @@
+---
+title: "Spatial Trial Simulation"
+author: "Sam Watson"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, results='hide', message=FALSE, warning=FALSE}
+## SET THE PARAMETERS IN THE R FILES continuous_simulation.R or discrete_simulation.R
+continuous <- TRUE ## CHANGE THIS TO FALSE FOR THE DISCRETE SIMULATION
+generate_markdown <- TRUE
+if(continuous){
+  source("continuous_simulation.R")
+} else {
+  source("discrete_simulation.R")
+}
+```
+
+## Simulation Parameters
+
+```{r, echo = FALSE, results = 'asis'}
+pars_df <- readRDS("/results/last_sim_pars.RDS")
+knitr::kable(pars_df, caption = "Simulation parameter values", row.names = FALSE)
+```
+
+## Simulation Results
+```{r, echo = FALSE, results = 'asis'}
+res_df <- readRDS("/results/last_sim_results.RDS")
+knitr::kable(res_df, caption = "Simulation results", row.names = FALSE)
+```
