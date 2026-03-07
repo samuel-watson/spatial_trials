@@ -27,7 +27,7 @@ model_std <- Model$new(
   family = gaussian()
 )
 
-model_std$LA()
+model_std$fit()
 
 # first model, no adjustment
 # null model for permutation test
